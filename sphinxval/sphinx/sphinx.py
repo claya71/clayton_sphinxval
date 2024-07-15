@@ -5,6 +5,7 @@ from ..utils import validation as valid
 from ..utils import match
 from ..utils import resume
 from ..utils import report
+from ..utils import sphinxToVivid
 from ..log import QueueListenerHandler
 import datetime
 import pickle
@@ -127,3 +128,6 @@ def validate(data_list, model_list, top=None, DoResume=False, df_pkl=""):
     valid.intuitive_validation(matched_sphinx, model_names,
         all_energy_channels, all_observed_thresholds, observed_sep_events, profname_dict, DoResume, r_df)
     logger.info("Completed validation.")
+
+
+    sphinxToVivid.setup_df(inFile= cfg.outpath + '/pkl/SPHINX_dataframe.pkl', outFile=cfg.outpath + '/SphinxToVivid_database')
