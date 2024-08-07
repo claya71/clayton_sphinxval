@@ -63,7 +63,7 @@ mm_pred_threshold = {"threshold": 5, "threshold_units": t_units}
 #mm_obs_threshold = {"threshold": 0.1, "threshold_units": t_units}
 
 mm_obs_energy_channel = {"min": 10, "max": -1, "units": e_units}
-mm_obs_threshold = {"threshold": 10, "threshold_units": t_units}
+mm_obs_threshold = {"threshold": 9999, "threshold_units": t_units}
 
 ###AUTOMATIC
 mm_pred_ek = objh.energy_channel_to_key(mm_pred_energy_channel)
@@ -84,7 +84,7 @@ in_percent = ["Mean Percent Error (MPE)",
               "Mean Symmetric Percent Error (MSPE)",
               "Mean Symmetric Absolute Percent Error (SMAPE)",
               "Median Symmetric Accuracy (MdSA)",
-              "Mean Accuracy Ratio (MAR)"]
+              "Mean Accuracy Ratio (MAR)", "Prevalence Threshold"]
 
 # SAVES THE CURRENT GIT COMMIT SHA HASH FOR LATER USE
 git_repo = git.Repo(search_parent_directories=True)

@@ -464,7 +464,7 @@ class Probability:
         self.uncertainty = uncertainty
         self.threshold = threshold
         self.threshold_units = threshold_units
-        
+        logger.debug('In Prob Class ' + str(probability_value))
         return
 
 
@@ -1943,6 +1943,7 @@ class SPHINX:
         msg += ("0.0 = no SEP event (threshold crossing) in prediction window" + "\n")
         msg += ("1.0 = SEP event (threshold crossing) in prediction window" + "\n")
         msg += ("-------------------------------------------------------------" + "\n")
+        msg += ('Check this shit ' + self.thresholds + '\n')
         for thresh in self.thresholds:
             thresh_key = objh.threshold_to_key(thresh)
             msg += (" Threshold: " + str(thresh) + "\n")
@@ -2211,7 +2212,14 @@ class SPHINX:
                 msg += ("  " + str(self.observed_ongoing_events[thresh_key]) + "\n")
                 
         msg += ("================== END REPORT ===============================" + "\n")
-
+        msg += ('Check this shit ' + str(self.thresholds) + '\n')
+        for thresh in self.thresholds:
+            thresh_key = objh.threshold_to_key(thresh)
+            msg += (" Threshold: " + str(thresh) + "\n")
+            msg += ("  Match Status: " + self.sep_match_status[thresh_key] + "\n")
+            msg += ("  Matched observation: " + str(self.observed_probability_source[thresh_key]) + "\n")
+            msg += ("  Probability: "
+            + str(self.observed_probability[thresh_key].probability_value) + "\n")
         return msg
 
 
@@ -2328,11 +2336,13 @@ class SPHINX:
         """
         tk = objh.threshold_to_key(pred_thresh)
         if pred_thresh not in self.thresholds:
+            logger.debug('setting up the thresh key')
             if cfg.do_mismatch and cfg.mm_model in self.prediction.short_name:
                 if pred_thresh == cfg.mm_pred_threshold:
                     obs_thresh = cfg.mm_obs_threshold
                     if cfg.mm_obs_threshold in self.thresholds:
                         tk = cfg.mm_obs_tk
+                        logger.debug('new thresh key ' + tk)
                         
         return tk
 
@@ -2368,13 +2378,15 @@ class SPHINX:
             #to be saved in the sphinx objects according to observed threshold
             #if mismatch was allowed.
             if self.mismatch:
+                logger.debug('In mismatch return_predicted_probability')
                 tk = self.mismatch_thresh_key(pred_thresh)
             
+            logger.debug('tk and thresh_key ' + tk + '_' + thresh_key)
             if tk != thresh_key:
                 continue
             
             pred_prob = prob_obj.probability_value
-
+            logger.debug(pred_prob)
         return pred_prob, match_status
 
 
@@ -2742,5 +2754,3 @@ class SPHINX:
                     pred_units = obs_units
 
         return predicted, pred_units, pred_time, match_status
-
-

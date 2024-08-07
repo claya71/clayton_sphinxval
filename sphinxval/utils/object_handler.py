@@ -64,7 +64,6 @@ def energy_channel_to_key(energy_channel):
         :key: (string)
     
     """
-
     units = energy_channel['units']
     if isinstance(units,str):
         units = vunits.convert_string_to_units(units)

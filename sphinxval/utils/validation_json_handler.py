@@ -1057,7 +1057,6 @@ def dict_to_fluence(event, fl_dict):
         uncertainty_high = fl_dict['uncertainty_high']
         if isinstance(uncertainty_high, str):
             uncertainty_high = float(uncertainty_high)
-
     return fluence, units, threshold, threshold_units, uncertainty_low, uncertainty_high
 
 

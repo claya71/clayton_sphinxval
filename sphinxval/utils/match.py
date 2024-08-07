@@ -1659,6 +1659,7 @@ def match_sep_quantities(sphinx, observation_obj, thresh, is_win_overlap,
     #Appropriate observed probability for prediction window, etc
     prob = cl.Probability(None, 0.0, thresh['threshold'],
             thresh['threshold_units'])
+    logger.debug('match_sep_quantities Probability ' + str(prob))
     
     if not is_win_overlap: # this code is never touched! -- LS-code-comment
         sep_status = None
@@ -1858,11 +1859,10 @@ def match_sep_end_time(sphinx, observation_obj, thresh, is_win_overlap,
 
 
     fluence = None
-    for fl in observation_obj.fluences:
+    for fl in observation_obj.fluences:     
         if fl.threshold != thresh['threshold']:
             continue
         sphinx.observed_fluence[thresh_key] = fl
-
 
     #Fluence spectra
     spectrum = None
@@ -2296,8 +2296,8 @@ def setup_match_all_forecasts(all_energy_channels, obs_objs, obs_values, model_o
                 observed_sep_events[model][energy_key].update({obs_thresh_key:[]})
 
     #Launch into matching of observations and forecasts
-    
     for energy_key in all_energy_channels:
+        logger.info('all_energy_channels in setup_match_all_forecasts  ' + energy_key)
         #print("\n")
         #print("Identifying Match Criteria for " + str(energy_key) + "," + str(datetime.datetime.now()))
         observation_objs = obs_objs[energy_key] #Observation objects
@@ -2306,11 +2306,10 @@ def setup_match_all_forecasts(all_energy_channels, obs_objs, obs_values, model_o
             #One SPHINX object contains all matching information and
             #predicted and observed values (and all thresholds)
             sphinx = objh.initialize_sphinx(fcast)
-            
             #If this is a set of predictions and observations that are
             #allowed to have a set of mismatched energy channels and
             #thresholds
-            if cfg.do_mismatch and energy_key == cfg.mm_energy_key\
+            if cfg.do_mismatch and energy_key in cfg.mm_energy_key\
                 and cfg.mm_model in fcast.short_name:
                 sphinx.mismatch = True
                 logger.debug("Mismatched channel allowed.")
@@ -2386,12 +2385,13 @@ def setup_match_all_forecasts(all_energy_channels, obs_objs, obs_values, model_o
             if sphinx.mismatch:
                 if cfg.mm_pred_threshold not in all_fcast_thresholds:
                     all_fcast_thresholds.append(cfg.mm_pred_threshold)
-            
+            logger.debug('all_fcast_thresholds ' + str(all_fcast_thresholds))
+            logger.debug('for unittesting this should be overwritten by config_tests ' + str(cfg.mm_pred_threshold))
             observed_peak_flux = None
             observed_peak_flux_max = None
             
             for f_thresh in all_fcast_thresholds:
-                logger.debug("Checking Threshold: " + str(f_thresh))
+                logger.info("Checking Threshold: " + str(f_thresh))
                 fcast_thresh = f_thresh
                 
                 #If this is a mismatch energy channel, then only want to
@@ -2408,6 +2408,7 @@ def setup_match_all_forecasts(all_energy_channels, obs_objs, obs_values, model_o
                 #Check if this threshold is present in the observations
                 #Can only be compared if present in both
                 if fcast_thresh not in obs_values[energy_key]['thresholds']:
+                    logger.debug('Should not be here')
                     continue
 
                 #Add threshold so that objects saved in SPHINX object
