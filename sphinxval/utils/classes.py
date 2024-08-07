@@ -1943,7 +1943,6 @@ class SPHINX:
         msg += ("0.0 = no SEP event (threshold crossing) in prediction window" + "\n")
         msg += ("1.0 = SEP event (threshold crossing) in prediction window" + "\n")
         msg += ("-------------------------------------------------------------" + "\n")
-        msg += ('Check this shit ' + self.thresholds + '\n')
         for thresh in self.thresholds:
             thresh_key = objh.threshold_to_key(thresh)
             msg += (" Threshold: " + str(thresh) + "\n")
@@ -2212,15 +2211,6 @@ class SPHINX:
                 msg += ("  " + str(self.observed_ongoing_events[thresh_key]) + "\n")
                 
         msg += ("================== END REPORT ===============================" + "\n")
-        msg += ('Check this shit ' + str(self.thresholds) + '\n')
-        for thresh in self.thresholds:
-            thresh_key = objh.threshold_to_key(thresh)
-            msg += (" Threshold: " + str(thresh) + "\n")
-            msg += ("  Match Status: " + self.sep_match_status[thresh_key] + "\n")
-            msg += ("  Matched observation: " + str(self.observed_probability_source[thresh_key]) + "\n")
-            msg += ("  Probability: "
-            + str(self.observed_probability[thresh_key].probability_value) + "\n")
-        return msg
 
 
 
