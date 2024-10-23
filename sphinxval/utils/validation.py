@@ -451,9 +451,9 @@ def fill_sphinx_dict_row(sphinx, dict, energy_key, thresh_key, profname_dict):
     #with read/write. Kept mainly for human reference and traceability. Not used
     #in the validation process.
     dict["All Thresholds in Prediction"].append(str(sphinx.prediction.all_thresholds))
-    dict["Last Eruption Time"].append(str(sphinx.last_eruption_time))
-    dict["Last Trigger Time"].append(str(sphinx.last_trigger_time))
-    dict["Last Input Time"].append(str(sphinx.last_input_time))
+    dict["Last Eruption Time"].append(sphinx.last_eruption_time)
+    dict["Last Trigger Time"].append(sphinx.last_trigger_time)
+    dict["Last Input Time"].append(sphinx.last_input_time)
     
     try:
         dict["Threshold Crossed in Prediction Window"].append(str(sphinx.threshold_crossed_in_pred_win[thresh_key]))
@@ -645,6 +645,7 @@ def initialize_awt_dict():
             "Median AWT for Predicted SEP All Clear to Observed SEP Threshold Crossing Time": [],
             "Mean AWT for Predicted SEP All Clear to Observed SEP Start Time": [],
             "Median AWT for Predicted SEP All Clear to Observed SEP Start Time": [],
+            "Mean AWT Percent Error for Predicted SEP All Clear to Observed SEP Threshold Crossing Time": [],
 
 #            #Probability Forecasts - cannot without an explicit threshold
 #            "Mean AWT for Probability to Observed Threshold Crossing Time": [],
@@ -657,12 +658,14 @@ def initialize_awt_dict():
             "Median AWT for Predicted SEP Threshold Crossing Time to Observed SEP Threshold Crossing Time": [],
             "Mean AWT for Predicted SEP Threshold Crossing Time to Observed SEP Start Time": [],
             "Median AWT for Predicted SEP Threshold Crossing Time to Observed SEP Start Time": [],
+            "Mean AWT Percent Error for Predicted SEP Threshold Crossing Time to Observed SEP Threshold Crossing Time": [],
 
             #Start Time Forecasts
             "Mean AWT for Predicted SEP Start Time to Observed SEP Threshold Crossing Time": [],
             "Median AWT for Predicted SEP Start Time to Observed SEP Threshold Crossing Time": [],
             "Mean AWT for Predicted SEP Start Time to Observed SEP Start Time": [],
             "Median AWT for Predicted SEP Start Time to Observed SEP Start Time": [],
+            "Mean AWT Percent Error for Predicted SEP Start Time to Observed SEP Threshold Crossing Time": [],
  
 #             #Point Intensity Forecasts
 #            "Mean AWT for Predicted Point Intensity to Observed SEP Threshold Crossing Time": [],
@@ -3086,7 +3089,8 @@ def extract_awt_sub(df, model, energy_key, thresh_key, pred_key, match_key, obs_
                 'Forecast Source', 'Forecast Issue Time',
                 'Prediction Window Start', 'Prediction Window End',
                 'Observed SEP Threshold Crossing Time',
-                'Observed SEP Start Time',
+                'Observed SEP Start Time','Last Eruption Time', 
+                'Last Trigger Time', 'Last Input Time',
                 obs_key, pred_key, match_key]]
     else:
         sub = sub[['Model','Energy Channel Key', 'Threshold Key',
@@ -3095,7 +3099,8 @@ def extract_awt_sub(df, model, energy_key, thresh_key, pred_key, match_key, obs_
                 'Forecast Source', 'Forecast Issue Time',
                 'Prediction Window Start', 'Prediction Window End',
                 'Observed SEP Threshold Crossing Time',
-                'Observed SEP Start Time',
+                'Observed SEP Start Time','Last Eruption Time', 
+                'Last Trigger Time', 'Last Input Time',
                 pred_key, match_key]]
 
     sub = sub.loc[sub[match_key] == "SEP Event"]
@@ -3199,6 +3204,8 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
         cols = sub.columns.to_list()
         cols.append('AWT to Observed SEP Threshold Crossing Time')
         cols.append('AWT to Observed SEP Start Time')
+        if ftype['obs_key'] == '':
+            cols.append('AWT Percent Error to Observed SEP Threshold Crossing Time')
         if ftype['obs_key'] != '':
             cols.append('AWT to ' + ftype['obs_key'])
         sel_df = pd.DataFrame(columns=cols) #Selected forecasts and AWT results
@@ -3219,7 +3226,7 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
                     median_key = "Median AWT for " + ftype['pred_key'] + " to " + key
                     dict[mean_key].append(None)
                     dict[median_key].append(None)
-                
+               
                 continue
         
         #For each SEP event, identify the first forecast for that SEP event.
@@ -3252,13 +3259,16 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
                 continue
             
             row = sep_sub.iloc[idx].to_list()
-            
+            logger.info(str(ftype))
+            logger.info(row)
             #Calculate AWT
             issue_time = sep_sub.iloc[idx]['Forecast Issue Time']
+            logger.info(type(issue_time))
             if pd.isnull(issue_time):
                 continue
             
             tct = sep_sub.iloc[idx]['Observed SEP Threshold Crossing Time']
+            logger.info(type(tct))
             tc_awt = (tct - issue_time).total_seconds()/(60.*60.) #hours
             #If issue time is more than 7 days later than the threshold crossing time,
             #the assume this is not a realistic issue time and ignore
@@ -3283,6 +3293,68 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
                     obs_awt = np.nan
                 row.append(obs_awt)
 
+            if ftype['obs_key'] == '': 
+                # Only calculating the awtpe for things related to SEP Start or Threshcrossing
+                # Calculation for AWT Percent Error - which is based upon
+                # AWT / (Time between threshold crossing and corresponding trigger time)
+                # The denominator (gonna call it ptcl transit time for now) here 
+                # needs to account for whichever trigger the 
+                # forecasting model includes (eruption/trigger/input) but
+                # I don't want to calculate this AWTPE for each trigger this could be,
+                # that feels needless. If multiple of these times are given, find the 
+                # latest time and use that. 
+                erup_time = sep_sub.iloc[idx]['Last Eruption Time']
+                trig_time = sep_sub.iloc[idx]['Last Trigger Time']
+                input_time = sep_sub.iloc[idx]['Last Input Time']
+                logger.info('Last Eruption Time ' + str(erup_time))
+                logger.info('Last Trigger Time ' + str(trig_time))
+                logger.info('Last Input Time ' + str(input_time))
+
+
+                # Next if loop is testing if any two or three of the '... last times' are not NaT then taking whichever of those happens
+                # latest since that would be the last input (but not necessarily the last input time since that can be blank - confusing I know) 
+                # into the model. If only one of these times is not NaT then use that time. 
+                if not pd.isnull(erup_time) and not pd.isnull(trig_time) or not pd.isnull(erup_time) and not pd.isnull(input_time) \
+                        or not pd.isnull(trig_time) and not pd.isnull(input_time):
+                    if pd.isnull(erup_time):
+                        if trig_time > input_time:
+                            transit_time = (tct - trig_time).total_seconds()/(60.*60.)
+                        else:
+                            transit_time = (tct - input_time).total_seconds()/(60.*60.)
+                    elif pd.isnull(trig_time):
+                        if erup_time > input_time:
+                            transit_time = (tct - erup_time).total_seconds()/(60.*60.)
+                        else:
+                            transit_time = (tct - input_time).total_seconds()/(60.*60.)
+                    elif pd.isnull(input_time):
+                        logger.debug('In the input_time loop')
+                        if erup_time > trig_time or erup_time == trig_time:
+                            logger.info('erup_time here ' + str(type(sep_sub.iloc[idx]['Last Eruption Time'])))
+                            transit_time = (tct - erup_time).total_seconds()/(60.*60.)
+                        else:
+                            logger.info(type(trig_time))
+                            transit_time = (tct - trig_time).total_seconds()/(60.*60.)
+                    else:
+                        temp_time = max([erup_time, trig_time, input_time])
+                        logger.info('Temp_time ' + temp_time)
+                        transit_time = (tct - temp_time).total_seconds()/(60.*60.)
+                elif not pd.isnull(erup_time) and pd.isnull(trig_time) and pd.isnull(input_time):
+                    transit_time = (tct - erup_time).total_seconds()/(60.*60.)
+                elif not pd.isnull(trig_time) and pd.isnull(erup_time) and pd.isnull(input_time):
+                    transit_time = (tct - trig_time).total_seconds()/(60.*60.)
+                elif not pd.isnull(input_time) and pd.isnull(trig_time) and pd.isnull(erup_time):
+                    transit_time = (tct - input_time).total_seconds()/(60.*60.)
+                logger.info('Transit Time ' + str(transit_time))
+                logger.info("thresh crossing time " + str(tct))
+                if transit_time == 0.0:
+                    awtpe = 0.0
+                else:
+                    awtpe = tc_awt / transit_time
+                
+                row.append(awtpe) # 
+            
+
+            logger.info(row)
             #Insert value into dataframe to save AWT calculations for each SEP
             sel_df.loc[len(sel_df)] = row
 
@@ -3297,6 +3369,8 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
                 median_key = "Median AWT for " + ftype['pred_key'] + " to " + key
                 dict[mean_key].append(np.nan)
                 dict[median_key].append(np.nan)
+            if ftype['obs_key'] == '':
+                dict['Mean AWT Percent Error for ' + ftype['pred_key'] + ' to ' + time_keys[0]].append(np.nan)
 
             continue
 
@@ -3310,7 +3384,7 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
         for key in time_keys:
             chk = sel_df["AWT to " + key].to_list()
             chk_awts.extend([x for x in chk if x != None])
-
+        
         #Have AWT values for all SEPs for a given model, energy channel, and
         #threshold
         #Write to file if more than None values
@@ -3328,10 +3402,12 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
         #Calculate metrics for AWT to different times
         for key in time_keys:
             awts = sel_df["AWT to " + key].to_list()
+            
             awts = [x for x in awts if x != None]
             if len(awts) >= 1:
                 mean_awt = statistics.mean(awts)
                 median_awt = statistics.median(awts)
+                
             else:
                 mean_awt = None
                 median_awt = None
@@ -3340,6 +3416,13 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
             median_key = "Median AWT for " + ftype['pred_key'] + " to " + key
             dict[mean_key].append(mean_awt)
             dict[median_key].append(median_awt)
+        if ftype['obs_key'] == '':
+            awtpes = sel_df['AWT Percent Error to Observed SEP Threshold Crossing Time'].to_list()
+            if len(awts) >= 1:
+                mean_awtpe = statistics.mean(awtpes)
+            else:
+                mean_awtpe = None
+            dict['Mean AWT Percent Error for ' + ftype['pred_key'] + ' to ' + time_keys[0]].append(mean_awtpe)
 
     return
 
