@@ -151,6 +151,7 @@ def initialize_sphinx_dict():
             "Last Eruption Time": [], #Last time for flare/CME
             "Last Trigger Time": [],
             "Last Input Time": [],
+            'Time between Last Data and Observed SEP Threshold Crossing Time': [],
             "Threshold Crossed in Prediction Window": [],
             "All Threshold Crossing Times": [],
             "Eruption before Threshold Crossed": [],
@@ -455,6 +456,27 @@ def fill_sphinx_dict_row(sphinx, dict, energy_key, thresh_key, profname_dict):
     dict["Last Trigger Time"].append(sphinx.last_trigger_time)
     dict["Last Input Time"].append(sphinx.last_input_time)
     
+    # Defer to last eruption time, since it should be the latest one, but if there is no last eruption time, 
+    # use the latest from the other two
+    # "Time Between Last Data and Observed SEP Threshold Crossing Time" is the time between the latest model
+    # input and the threshold crossing time, essentially 
+    # time that particles had to do whatever they do after a flare/CME and their arrival at earth above
+    # our operational threshold. Putting this math in the dataframe following feedback from Katie,
+    # this is used as part of the awtpe calculation.  
+    logger.info(sphinx.last_eruption_time)
+    if not pd.isnull(sphinx.last_eruption_time):
+        dict['Time between Last Data and Observed SEP Threshold Crossing Time'].append((sphinx.observed_threshold_crossing[thresh_key].crossing_time - sphinx.last_eruption_time).total_seconds()/(60.*60.))
+    elif not pd.isnull(sphinx.last_trigger_time) and not pd.isnull(sphinx.last_input_time):
+        if pd.isnull(sphinx.last_eruption_time):
+            if sphinx.last_trigger_time > sphinx.last_input_time:
+                dict['Time between Last Data and Observed SEP Threshold Crossing Time'].append((sphinx.observed_threshold_crossing[thresh_key].crossing_time - sphinx.last_trigger_time).total_seconds()/(60.*60.))
+            else:
+                dict['Time between Last Data and Observed SEP Threshold Crossing Time'].append((sphinx.observed_threshold_crossing[thresh_key].crossing_time - sphinx.last_input_time).total_seconds()/(60.*60.))
+    elif not pd.isnull(sphinx.last_trigger_time) and pd.isnull(sphinx.last_eruption_time) and pd.isnull(sphinx.last_input_time):
+        dict['Time between Last Data and Observed SEP Threshold Crossing Time'].append((sphinx.observed_threshold_crossing[thresh_key].crossing_time - sphinx.last_trigger_time).total_seconds()/(60.*60.))
+    elif not pd.isnull(sphinx.last_input_time) and pd.isnull(sphinx.last_trigger_time) and pd.isnull(sphinx.last_eruption_time):
+        dict['Time between Last Data and Observed SEP Threshold Crossing Time'].append((sphinx.observed_threshold_crossing[thresh_key].crossing_time - sphinx.last_input_time).total_seconds()/(60.*60.))
+    logger.info('New shit ' + str(dict["Time between Last Data and Observed SEP Threshold Crossing Time"]))      
     try:
         dict["Threshold Crossed in Prediction Window"].append(str(sphinx.threshold_crossed_in_pred_win[thresh_key]))
         tc = [str(x) for x in sphinx.all_threshold_crossing_times[thresh_key]]
@@ -3091,6 +3113,7 @@ def extract_awt_sub(df, model, energy_key, thresh_key, pred_key, match_key, obs_
                 'Observed SEP Threshold Crossing Time',
                 'Observed SEP Start Time','Last Eruption Time', 
                 'Last Trigger Time', 'Last Input Time',
+                'Time between Last Data and Observed SEP Threshold Crossing Time',
                 obs_key, pred_key, match_key]]
     else:
         sub = sub[['Model','Energy Channel Key', 'Threshold Key',
@@ -3101,6 +3124,7 @@ def extract_awt_sub(df, model, energy_key, thresh_key, pred_key, match_key, obs_
                 'Observed SEP Threshold Crossing Time',
                 'Observed SEP Start Time','Last Eruption Time', 
                 'Last Trigger Time', 'Last Input Time',
+                'Time between Last Data and Observed SEP Threshold Crossing Time',
                 pred_key, match_key]]
 
     sub = sub.loc[sub[match_key] == "SEP Event"]
@@ -3294,6 +3318,16 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
                 row.append(obs_awt)
 
             if ftype['obs_key'] == '': 
+                time_between_trigger_and_thresh_cross = sep_sub.iloc[idx]['Time between Last Data and Observed SEP Threshold Crossing Time']
+                if pd.isnull(time_between_trigger_and_thresh_cross):
+                    awtpe = 0.0
+                else:
+                    awtpe = tc_awt / time_between_trigger_and_thresh_cross
+                
+                row.append(awtpe) # 
+
+
+
                 # Only calculating the awtpe for things related to SEP Start or Threshcrossing
                 # Calculation for AWT Percent Error - which is based upon
                 # AWT / (Time between threshold crossing and corresponding trigger time)
@@ -3303,55 +3337,8 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
                 # I don't want to calculate this AWTPE for each trigger this could be,
                 # that feels needless. If multiple of these times are given, find the 
                 # latest time and use that. 
-                erup_time = sep_sub.iloc[idx]['Last Eruption Time']
-                trig_time = sep_sub.iloc[idx]['Last Trigger Time']
-                input_time = sep_sub.iloc[idx]['Last Input Time']
-                logger.info('Last Eruption Time ' + str(erup_time))
-                logger.info('Last Trigger Time ' + str(trig_time))
-                logger.info('Last Input Time ' + str(input_time))
+            
 
-
-                # Next if loop is testing if any two or three of the '... last times' are not NaT then taking whichever of those happens
-                # latest since that would be the last input (but not necessarily the last input time since that can be blank - confusing I know) 
-                # into the model. If only one of these times is not NaT then use that time. 
-                if not pd.isnull(erup_time) and not pd.isnull(trig_time) or not pd.isnull(erup_time) and not pd.isnull(input_time) \
-                        or not pd.isnull(trig_time) and not pd.isnull(input_time):
-                    if pd.isnull(erup_time):
-                        if trig_time > input_time:
-                            transit_time = (tct - trig_time).total_seconds()/(60.*60.)
-                        else:
-                            transit_time = (tct - input_time).total_seconds()/(60.*60.)
-                    elif pd.isnull(trig_time):
-                        if erup_time > input_time:
-                            transit_time = (tct - erup_time).total_seconds()/(60.*60.)
-                        else:
-                            transit_time = (tct - input_time).total_seconds()/(60.*60.)
-                    elif pd.isnull(input_time):
-                        logger.debug('In the input_time loop')
-                        if erup_time > trig_time or erup_time == trig_time:
-                            logger.info('erup_time here ' + str(type(sep_sub.iloc[idx]['Last Eruption Time'])))
-                            transit_time = (tct - erup_time).total_seconds()/(60.*60.)
-                        else:
-                            logger.info(type(trig_time))
-                            transit_time = (tct - trig_time).total_seconds()/(60.*60.)
-                    else:
-                        temp_time = max([erup_time, trig_time, input_time])
-                        logger.info('Temp_time ' + temp_time)
-                        transit_time = (tct - temp_time).total_seconds()/(60.*60.)
-                elif not pd.isnull(erup_time) and pd.isnull(trig_time) and pd.isnull(input_time):
-                    transit_time = (tct - erup_time).total_seconds()/(60.*60.)
-                elif not pd.isnull(trig_time) and pd.isnull(erup_time) and pd.isnull(input_time):
-                    transit_time = (tct - trig_time).total_seconds()/(60.*60.)
-                elif not pd.isnull(input_time) and pd.isnull(trig_time) and pd.isnull(erup_time):
-                    transit_time = (tct - input_time).total_seconds()/(60.*60.)
-                logger.info('Transit Time ' + str(transit_time))
-                logger.info("thresh crossing time " + str(tct))
-                if transit_time == 0.0:
-                    awtpe = 0.0
-                else:
-                    awtpe = tc_awt / transit_time
-                
-                row.append(awtpe) # 
             
 
             logger.info(row)

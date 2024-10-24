@@ -1002,7 +1002,6 @@ class Forecast():
                 last_time = last_pi_time
             else:
                 last_time = max(last_time,last_pi_time)
-        logger.info('last_erup_time in classes ' + str(last_eruption_time) + ' ' + str(type(last_eruption_time)))
         return last_eruption_time, last_time
 
 
