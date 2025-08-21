@@ -1320,7 +1320,8 @@ def contingency_scores(h,m,f,c):
     'MARK': check_div(h, h+f) + check_div(c, m+c) - 1,  # Markedness
     'PT': calc_PT(h, m, f ,c),                         # Prevalence Threshold
     'BA': check_div(check_div(h, h+m)+check_div(c, f+c), 2), # Balanced Accuracy
-    'FM': np.sqrt(check_div(h, h+f)*check_div(h, h+m))  # Fowlkes-Mallows Index (Geometric mean of precision and recall)
+    'FM': np.sqrt(check_div(h, h+f)*check_div(h, h+m)),  # Fowlkes-Mallows Index (Geometric mean of precision and recall)
+    'FAER' : check_div(f, f+m)                          # False Alarm Event Ratio
     }
     #### Just doing some testing here with likelihood ratios, keep commented out for now
     # print(df[obs_key], df[pred_key])
