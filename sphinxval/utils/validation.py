@@ -20,6 +20,7 @@ import sklearn.metrics as skl
 import os.path
 import logging
 import pickle
+import json
 
 __author__ = "Katie Whitman"
 __maintainer__ = "Katie Whitman"
@@ -546,7 +547,7 @@ def fill_sphinx_dict_row(sphinx, dict, energy_key, thresh_key, profname_dict):
 def prepare_outdirs():
     if not os.path.isdir(config.outpath):
         os.mkdir(config.outpath)
-    for datafmt in ('pkl', 'csv', 'plots'):
+    for datafmt in ('pkl', 'csv', 'plots', 'json'):
         outdir = os.path.join(config.outpath, datafmt)
         if not os.path.isdir(outdir):
             os.mkdir(outdir) 
@@ -2842,6 +2843,8 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
     obs_st = sub['Observed SEP Start Time'].to_list()
     obs_et = sub['Observed SEP End Time'].to_list()
     obs_profs = sub['Observed Time Profile'].to_list()
+    pred_st = sub['Predicted SEP Start Time'].to_list()
+    pred_et = sub['Predicted SEP End Time'].to_list()
     pred_profs = sub['Predicted Time Profile'].to_list()
     pred_paths = sub['Forecast Path'].to_list()
     model_names = sub['Model'].to_list()
@@ -2853,10 +2856,15 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
 
     #For metrics calculations
     sepratio = []
+    sepmedratio = []
     sepE = []
+    sepmedE = []
     sepAE = []
+    sepmedAE = []
     sepLE = []
+    sepmedLE = []
     sepALE = []
+    sepmedALE = []
     sepAPE = []
     sepMAR = [] #Mean Accuracy Ratio
     sepRMSE = []
@@ -2875,11 +2883,15 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
     figname = ""
     tpfigname = ""
     for i in range(len(obs_profs)):
-        #Variables to calculate a mean metric across an individual time profile
+        #Variables to calculate a mean or median metric across an individual time profile
         E1 = np.nan
+        medE1 = np.nan
         AE1 = np.nan
+        medAE1 = np.nan
         LE1 = np.nan
+        medLE1 = np.nan
         ALE1 = np.nan
+        medALE1 = np.nan
         MAR1 = np.nan
         RMSE1 = np.nan
         MdSA1 = np.nan
@@ -2921,8 +2933,7 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
             continue
         
         #Remove zeros
-        obs_flux, obs_dates = zip(*filter(lambda x:x[0]>0.0, zip(obs_flux,
-            obs_dates)))
+        obs_flux, obs_dates = zip(*filter(lambda x:x[0]>0.0, zip(obs_flux, obs_dates)))
         pred_flux, pred_dates = zip(*filter(lambda x:x[0]>0.0, zip(pred_flux, pred_dates)))
         
         #If predicted time profile is all zeros
@@ -2935,12 +2946,19 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         obs_flux_interp = profile.interp_timeseries(obs_dates, obs_flux, "log",
             pred_dates)
         
-        #Trim the time profiles to the observed start and end time
-        logger.debug("Trimming between " + str(obs_st[i]) + " and " + str(obs_et[i]))
-        trim_pred_dates, trim_pred_flux = profile.trim_profile(obs_st[i],
-                obs_et[i], pred_dates, pred_flux)
-        trim_obs_dates, trim_obs_flux = profile.trim_profile(obs_st[i],
-                obs_et[i], pred_dates,  obs_flux_interp)
+        #Trim the time profiles to the observed start and end time or
+        #predicted start and end times - modified after SPHINX TP 2025
+        trim_st = obs_st[i]
+        trim_et = obs_et[i]
+        if not pd.isnull(pred_st[i]):
+            trim_st = max(obs_st[i],pred_st[i])
+        if not pd.isnull(pred_et[i]):
+            time_et = min(obs_et[i], pred_et[i])
+        logger.debug("Trimming between " + str(trim_st) + " and " + str(trim_et))
+        trim_pred_dates, trim_pred_flux = profile.trim_profile(trim_st,
+                trim_et, pred_dates, pred_flux)
+        trim_obs_dates, trim_obs_flux = profile.trim_profile(trim_st,
+                trim_et, pred_dates,  obs_flux_interp)
         
         
         #PLOT TIME PROFILE TO CHECK
@@ -2982,10 +3000,15 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
 
         if len(obs) >= 1 and len(pred) >= 1:
             ratio1 = statistics.mean(metrics.switch_error_func('Ratio',obs,pred))
+            medratio1 = statistics.median(metrics.switch_error_func('Ratio',obs,pred))
             E1 = statistics.mean(metrics.switch_error_func('E',obs,pred))
+            medE1 = statistics.median(metrics.switch_error_func('E',obs,pred))
             AE1 = statistics.mean(metrics.switch_error_func('AE',obs,pred))
+            medAE1 = statistics.median(metrics.switch_error_func('AE',obs,pred))
             LE1 = statistics.mean(metrics.switch_error_func('LE',obs,pred))
+            medLE1 = statistics.median(metrics.switch_error_func('LE',obs,pred))
             ALE1 = statistics.mean(metrics.switch_error_func('ALE',obs,pred))
+            medALE1 = statistics.median(metrics.switch_error_func('ALE',obs,pred))
             APE1 = statistics.mean(metrics.switch_error_func('APE',obs,pred))
             MAR1 =  statistics.mean(metrics.switch_error_func('APE',obs,pred))#Mean Accuracy Ratio
             RMSE1 = metrics.switch_error_func('RMSE',obs,pred)
@@ -3043,10 +3066,15 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
                 corr_plot.close()
 
         sepratio.append(ratio1)
+        sepmedratio.append(medratio1)
         sepE.append(E1)
+        sepmedE.append(medE1)
         sepAE.append(AE1)
+        sepmedAE.append(medAE1)
         sepLE.append(LE1)
+        sepmedLE.append(medLE1)
         sepALE.append(ALE1)
+        sepmedALE.append(medALE1)
         sepAPE.append(APE1)
         sepMAR.append(MAR1) #Mean Accuracy Ratio
         sepRMSE.append(RMSE1)
@@ -3062,14 +3090,17 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         sepfact2.append(fact2)
 
     #Append sub with the metrics for each observed and predicted time profile match
-    errors = {'Ratio': sepratio, 'Error': sepE, 'Absolute Error': sepAE, 'Log Error': sepLE, 'Absolute Log Error': sepALE, 
-              'Absolute Percent Error': sepAPE, 'Mean Accuracy Ratio': sepMAR, 'Root Mean Square Error': sepRMSE, 
+    errors = {'Mean Ratio': sepratio, 'Median Ratio': sepmedratio, 'Mean Error': sepE, 'Median Error': sepmedE,
+              'Mean Absolute Error': sepAE, 'Median Absolute Error': sepmedAE,
+              'Mean Log Error': sepLE, 'Median Log Error': sepmedLE,
+              'Mean Absolute Log Error': sepALE, 'Median Absolute Log Error': sepmedALE,
+              'Absolute Percent Error': sepAPE, 'Mean Accuracy Ratio': sepMAR, 'Root Mean Square Error': sepRMSE,
               'Root Mean Square Log Error': sepRMSLE, 'Percent Error': sepPE, 'Symmetric Percent Error': sepSPE, 
               'Symmetric Absolute Perecent Error': sepSAPE,'Pearson Correlation Coefficient (linear)': sepRlin, 
               'Pearson Correlation Coefficient (log)': sepRlog, 'Spearman Correlation Coefficient': sepSlin, 
               'Within a Factor of 10': sepfact10, 'Within a Factor of 2': sepfact2}
     
-    if len(errors['Ratio']) != 0:
+    if len(errors['Mean Ratio']) != 0:
         sub = sub.assign(**errors)
     
     #Write out selections and the metrics associated with each profile match
@@ -3107,15 +3138,15 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
     
     if len(sepE) > 1:
         MRatio = statistics.mean(sepratio)
-        MedRatio = statistics.median(sepratio)
+        MedRatio = statistics.median(sepmedratio)
         ME = statistics.mean(sepE)
-        MedE = statistics.median(sepE)
+        MedE = statistics.median(sepmedE)
         MAE = statistics.mean(sepAE)
-        MedAE = statistics.median(sepAE)
+        MedAE = statistics.median(sepmedAE)
         MLE = statistics.mean(sepLE)
-        MedLE = statistics.median(sepLE)
+        MedLE = statistics.median(sepmedLE)
         MALE = statistics.mean(sepALE)
-        MedALE = statistics.median(sepALE)
+        MedALE = statistics.median(sepmedALE)
         MAPE = statistics.mean(sepAPE)
         MAR = statistics.mean(sepMAR) #Mean Accuracy Ratio
         RMSE = statistics.mean(sepRMSE)
@@ -3129,15 +3160,15 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
 
     if len(sepE) == 1:
         MRatio = sepratio[0]
-        MedRatio = sepratio[0]
+        MedRatio = sepmedratio[0]
         ME = sepE[0]
-        MedE = sepE[0]
+        MedE = sepmedE[0]
         MAE = sepAE[0]
-        MedAE = sepAE[0]
+        MedAE = sepmedAE[0]
         MLE = sepLE[0]
-        MedLE = sepLE[0]
+        MedLE = sepmedLE[0]
         MALE = sepALE[0]
-        MedALE = sepALE[0]
+        MedALE = sepmedALE[0]
         MAPE = sepAPE[0]
         MAR = sepMAR[0] #Mean Accuracy Ratio
         RMSE = sepRMSE[0]
@@ -3667,6 +3698,61 @@ def pretty(d, indent=0):
          print('\t' * (indent+1) + str(value))
 
 
+def profile_output(sphinx_dataframe, resume_obs, resume_model):
+    
+    # Is there a point to 'resume' for the profiles? 
+    u_obs_profs = resume.identify_unique(sphinx_dataframe, 'Observed Time Profile')
+    
+    u_model_profs = resume.identify_unique(sphinx_dataframe, 'Predicted Time Profile')
+    
+  
+
+    observed_profs = {}
+    model_profs = {}
+    for u in u_obs_profs:
+        if resume_obs is not None and u in resume_obs:
+            continue
+        else:
+            for u_i in u.rsplit(','):
+                obs_dates, obs_profiles = profile.read_single_time_profile(u_i)
+                obs_dates = [x.strftime('%Y-%m-%dT%H:%M:%SZ') for x in obs_dates]
+                observed_profs[u_i] = {'dates': obs_dates, 'fluxes': obs_profiles}
+    for um in u_model_profs:
+        if resume_model is not None and um in resume_model:
+            continue
+        else:
+            for um_i in um.rsplit(','):
+                model_dates, model_profiles = profile.read_single_time_profile(um_i)
+                model_dates = [x.strftime('%Y-%m-%dT%H:%M:%SZ') for x in model_dates]
+                model_profs[um_i] = {'dates': model_dates, 'fluxes': model_profiles}
+
+
+    if resume_obs is not None:
+        observed_profs = resume_obs | observed_profs
+    if resume_model is not None:
+        model_profs = resume_model | model_profs
+
+ 
+    obs_file_path = os.path.join(config.outpath,'/json/observed_profiles.json')
+    with open(obs_file_path, 'w+') as json_file:
+        json.dump(observed_profs, json_file, indent = 4)
+    pickle_file_path = os.path.join(config.outpath, '/pkl/observed_profiles.pkl') # Desired name for your pickle file
+    with open(pickle_file_path, 'wb') as f:
+        pickle.dump(observed_profs, f)
+    
+
+    model_file_path = os.path.join(config.outpath, '/json/model_profiles.json')
+    with open(model_file_path, 'w+') as json_file:
+        json.dump(model_profs, json_file, indent = 4)
+    pickle_file_path = os.path.join(config.outpath, '/pkl/model_profiles.pkl') # Desired name for your pickle file
+    with open(pickle_file_path, 'wb') as f:
+        pickle.dump(model_profs, f)
+
+
+
+    return
+
+
 def calculate_intuitive_metrics(df, model_names, all_energy_channels,
     all_observed_thresholds, validation_type="All"):
     """ Calculate metrics appropriate to each quantity and
@@ -3861,7 +3947,7 @@ def validation_explanation():
 
 def intuitive_validation(evaluated_sphinx, removed_sphinx, model_names,
     all_energy_channels, all_observed_thresholds, observed_sep_events,
-    profname_dict, r_df=None):
+    profname_dict, r_df=None, r_obs= None, r_mod= None):
     """ In the intuitive_validation subroutine, forecasts are validated in a
         way similar to which people would interpret forecasts.
     
@@ -3972,6 +4058,10 @@ def intuitive_validation(evaluated_sphinx, removed_sphinx, model_names,
     #Record explanatory information to the log
     validation_explanation()
     
+    
+
+    profile_output(df, r_obs, r_mod)
+
     logger.info("intuitive_validation: Validation process complete.")
 
     return df   
