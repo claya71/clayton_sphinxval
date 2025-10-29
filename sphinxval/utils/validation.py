@@ -765,6 +765,8 @@ def initialize_all_clear_dict():
             "Probability of Correct Negatives": [],
             "Frequency of Correct Negatives": [],
             "False Alarm Ratio": [],
+            "False Alarm Event Ratio": [],
+            'Tau': [],
             "Detection Failure Ratio": [],
             "Threat Score": [],
             "Odds Ratio": [],
@@ -906,6 +908,8 @@ def fill_all_clear_dict(dict, model, energy_key, thresh_key, pred_energy_key,
     dict["Frequency of Correct Negatives"].append(scores['FOCN'])
     dict["False Alarm Ratio"].append(scores['FAR'])
     dict["Detection Failure Ratio"].append(scores['DFR'])
+    dict['False Alarm Event Ratio'].append(scores['FAER'])
+    dict['Tau'].append(scores['Tau'])
     dict["Threat Score"].append(scores['TS']) #Critical Success Index
     dict["Odds Ratio"].append(scores['OR'])
     dict["Gilbert Skill Score"].append(scores['GSS']) #Equitable Threat Score
@@ -2695,6 +2699,7 @@ def peak_intensity_time_intuitive_metrics(df, dict, model, energy_key,
 
     obs = sub['Observed SEP Peak Intensity (Onset Peak) Time'].to_list()
     pred = sub['Predicted SEP Peak Intensity (Onset Peak) Time'].to_list()
+
     td = (sub['Predicted SEP Peak Intensity (Onset Peak) Time'] - sub['Observed SEP Peak Intensity (Onset Peak) Time'])
 
     
