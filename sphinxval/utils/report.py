@@ -812,11 +812,13 @@ def report(output_dir, relative_path_plots, sphinx_dataframe=None): ### ADD OPTI
     # define appendages (First, Last, Mean, Max, ...)
     appendages = ['', '_First', '_Last', '_Mean', '_Max']
     for i in range(0, len(models)):
+        
         model = models[i]
         markdown_texts = {}
         appendage_set_list = []
         html_text = get_html_report_preamble(model)
         validation_reference_subtext_html = ''
+        logger.info(str(model))
         # define on/off flags for validation reference tables
         validation_reference_flag_dict = {'All Clear' : True,
                                           'AWT' : True,
@@ -826,7 +828,7 @@ def report(output_dir, relative_path_plots, sphinx_dataframe=None): ### ADD OPTI
                                           'Probability' : True,
                                          }
         for j in range(0, len(appendages)):
-        
+            # logger.info('Starting ' + appendages[j])
             # check which sections to include
             all_clear = False
             awt = False

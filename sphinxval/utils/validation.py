@@ -6,6 +6,8 @@ from . import config
 from . import time_profile as profile
 from . import resume
 from . import duplicates
+from . import validation_json_handler as vjson
+from .DUMs import dums
 import matplotlib.pylab as plt
 from scipy.stats import pearsonr
 import statistics
@@ -14,6 +16,7 @@ import sys
 import os.path
 import pandas as pd
 import datetime
+
 import scipy
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
 import sklearn.metrics as skl
@@ -560,6 +563,7 @@ def prepare_outdirs():
 def write_df(df, name, verbose=True):
     """Writes a pandas dataframe to the standard location in multiple formats
     """
+    # dataformats = (('csv',  getattr(df, 'to_csv'), {} ),) # Remove this workaround once official ***********************************************************************************************************************************************************
     dataformats = (('pkl' , getattr(df, 'to_pickle'), {}),
                    ('csv',  getattr(df, 'to_csv'), {}))
     for ext, write_func, kwargs in dataformats:
@@ -2385,7 +2389,6 @@ def threshold_crossing_intuitive_metrics(df, dict, model, energy_key,
     #Select rows to calculate metrics
     sub = df.loc[(df['Model'] == model) & (df['Energy Channel Key'] ==
         energy_key) & (df['Threshold Key'] == thresh_key)]
-
     sub = sub[['Model','Energy Channel Key', 'Threshold Key',
             'Mismatch Allowed',
             'Prediction Energy Channel Key', 'Prediction Threshold Key',
@@ -2420,8 +2423,9 @@ def threshold_crossing_intuitive_metrics(df, dict, model, energy_key,
         fnm = fnm + "_" + validation_type
     write_df(sub, fnm)
 
-    obs = sub['Observed SEP Threshold Crossing Time'].to_list()
-    pred = sub['Predicted SEP Threshold Crossing Time'].to_list()
+   
+    sub['Predicted SEP Threshold Crossing Time'] = pd.to_datetime(sub['Predicted SEP Threshold Crossing Time'])
+    sub['Observed SEP Threshold Crossing Time'] = pd.to_datetime(sub['Observed SEP Threshold Crossing Time'])
     td = (sub['Predicted SEP Threshold Crossing Time'] - sub['Observed SEP Threshold Crossing Time'])
 
     td = td.dt.total_seconds()/(60*60) #convert to hours
@@ -2486,8 +2490,9 @@ def start_time_intuitive_metrics(df, dict, model, energy_key, thresh_key,
         fnm = fnm + "_" + validation_type
     write_df(sub, fnm)
 
-    obs = sub['Observed SEP Start Time'].to_list()
-    pred = sub['Predicted SEP Start Time'].to_list()
+  
+    sub['Predicted SEP Start Time'] = pd.to_datetime(sub['Predicted SEP Start Time'])
+    sub['Observed SEP Start Time'] = pd.to_datetime(sub['Observed SEP Start Time'])
     td = (sub['Predicted SEP Start Time'] - sub['Observed SEP Start Time'])
     
     td = td.dt.total_seconds()/(60*60) #convert to hours
@@ -2553,6 +2558,8 @@ def end_time_intuitive_metrics(df, dict, model, energy_key,
 
     obs = sub['Observed SEP End Time'].to_list()
     pred = sub['Predicted SEP End Time'].to_list()
+    sub['Predicted SEP End Time'] = pd.to_datetime(sub['Predicted SEP End Time'])
+    sub['Observed SEP End Time'] = pd.to_datetime(sub['Observed SEP End Time'])
     td = (sub['Predicted SEP End Time'] - sub['Observed SEP End Time'])
 
     td = td.dt.total_seconds()/(60*60) #convert to hours
@@ -2622,7 +2629,7 @@ def duration_intuitive_metrics(df, dict, model, energy_key, thresh_key,
 
     obs = sub['Observed SEP Duration']
     pred = sub['Predicted SEP Duration']
-
+    
     td = pred - obs #shorter duration is negative
     td = td.to_list()
     abs_td = [abs(x) for x in td]
@@ -2693,8 +2700,8 @@ def peak_intensity_time_intuitive_metrics(df, dict, model, energy_key,
         fnm = fnm + "_" + validation_type
     write_df(sub, fnm)
 
-    obs = sub['Observed SEP Peak Intensity (Onset Peak) Time'].to_list()
-    pred = sub['Predicted SEP Peak Intensity (Onset Peak) Time'].to_list()
+    sub['Predicted SEP Peak Intensity (Onset Peak) Time'] = pd.to_datetime(sub['Predicted SEP Peak Intensity (Onset Peak) Time'])
+    sub['Observed SEP Peak Intensity (Onset Peak) Time'] = pd.to_datetime(sub['Observed SEP Peak Intensity (Onset Peak) Time'])
     td = (sub['Predicted SEP Peak Intensity (Onset Peak) Time'] - sub['Observed SEP Peak Intensity (Onset Peak) Time'])
 
     
@@ -2785,6 +2792,8 @@ def peak_intensity_max_time_intuitive_metrics(df, dict, model, energy_key,
 
     obs = sub['Observed SEP Peak Intensity Max (Max Flux) Time'].to_list()
     pred = sub['Predicted SEP Peak Intensity Max (Max Flux) Time'].to_list()
+    sub['Predicted SEP Peak Intensity Max (Max Flux) Time'] = pd.to_datetime(sub['Predicted SEP Peak Intensity Max (Max Flux) Time'])
+    sub['Observed SEP Peak Intensity Max (Max Flux) Time'] = pd.to_datetime(sub['Observed SEP Peak Intensity Max (Max Flux) Time'])
     td = (sub['Predicted SEP Peak Intensity Max (Max Flux) Time'] - sub['Observed SEP Peak Intensity Max (Max Flux) Time'])
 
 
@@ -2882,7 +2891,12 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
     tp_plotnames = ""
     figname = ""
     tpfigname = ""
+    model_prof_df = pd.read_json('./output/json/model_profiles.json')
+    obs_prof_df = pd.read_json('./output/json/observed_profiles.json')
+  
+    
     for i in range(len(obs_profs)):
+        
         #Variables to calculate a mean or median metric across an individual time profile
         E1 = np.nan
         medE1 = np.nan
@@ -2905,24 +2919,32 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         fact10 = np.nan
         fact2 = np.nan
         
-        logger.debug("Comparing time profile of " + pred_profs[i] + " to observations.")
+        logger.info("Comparing time profile of " + pred_profs[i] + " to observations.")
         all_obs_dates = []
         all_obs_flux = []
         #Read in and combine time profiles of observations inside
         #prediction window
         obs_fnames = obs_profs[i].strip().split(",")
-        logger.debug("Comparing to OBSERVED TIME PROFILES: " + str(obs_fnames))
+        logger.info("Comparing to OBSERVED TIME PROFILES: " + str(obs_fnames))
         for j in range(len(obs_fnames)):
-            dt, flx = profile.read_single_time_profile(obs_fnames[j])
+            
+            
+            # df = 
+            dt = [vjson.zulu_to_time(t) for t in obs_prof_df[obs_fnames[j]]['dates']]
+            flx = obs_prof_df[obs_fnames[j]]['fluxes']
+            # dt, flx = profile.read_single_time_profile(obs_fnames[j])
             all_obs_dates.append(dt)
             all_obs_flux.append(flx)
-        
+
         obs_dates, obs_flux = profile.combine_time_profiles(all_obs_dates,
             all_obs_flux)
-        pred_dates, pred_flux = profile.read_single_time_profile(pred_profs[i])
+        pred_dates = [vjson.zulu_to_time(x) for x in model_prof_df[pred_profs[i]]['dates']]
+        pred_flux = model_prof_df[pred_profs[i]]['fluxes']
+        # pred_dates, pred_flux = profile.read_single_time_profile(pred_profs[i])
         if not pred_flux:
             #Remove row for bad time profile from sub
             sub = sub[sub['Predicted Time Profile'] != pred_profs[i]]
+            
             continue
         
         #If all the flux values are zero, then will make the zip lines crash.
@@ -2930,6 +2952,7 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         if len(test) == len(pred_flux):
             #Remove row for bad time profile from sub
             sub = sub[sub['Predicted Time Profile'] != pred_profs[i]]
+            
             continue
         
         #Remove zeros
@@ -2940,6 +2963,7 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         if not pred_flux:
             #Remove row for bad time profile from sub
             sub = sub[sub['Predicted Time Profile'] != pred_profs[i]]
+            
             continue
         
         #Interpolate observed time profile onto predicted timestamps
@@ -2949,12 +2973,15 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         #Trim the time profiles to the observed start and end time or
         #predicted start and end times - modified after SPHINX TP 2025
         trim_st = obs_st[i]
+  
         trim_et = obs_et[i]
+
+        
         if not pd.isnull(pred_st[i]):
             trim_st = max(obs_st[i],pred_st[i])
         if not pd.isnull(pred_et[i]):
             time_et = min(obs_et[i], pred_et[i])
-        logger.debug("Trimming between " + str(trim_st) + " and " + str(trim_et))
+        logger.info("Trimming between " + str(trim_st) + " and " + str(trim_et))
         trim_pred_dates, trim_pred_flux = profile.trim_profile(trim_st,
                 trim_et, pred_dates, pred_flux)
         trim_obs_dates, trim_obs_flux = profile.trim_profile(trim_st,
@@ -2988,6 +3015,7 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         if not trim_pred_flux or not trim_obs_flux:
             #Remove row for bad time profile from sub
             sub = sub[sub['Predicted Time Profile'] != pred_profs[i]]
+            
             continue
 
         obs, pred = metrics.remove_none(trim_obs_flux,trim_pred_flux)
@@ -2995,9 +3023,10 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
         if not obs or not pred:
             #Remove row for bad time profile from sub
             sub = sub[sub['Predicted Time Profile'] != pred_profs[i]]
+            
             continue
         
-
+        
         if len(obs) >= 1 and len(pred) >= 1:
             ratio1 = statistics.mean(metrics.switch_error_func('Ratio',obs,pred))
             medratio1 = statistics.median(metrics.switch_error_func('Ratio',obs,pred))
@@ -3017,7 +3046,7 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
             PE1 = statistics.mean(metrics.switch_error_func('PE',obs,pred))
             SPE1 = statistics.mean(metrics.switch_error_func('SPE',obs,pred))
             SAPE1 = statistics.mean(metrics.switch_error_func('SAPE',obs,pred))
-
+            
             #Fluxes within a factor of 10 and 2
             temp = metrics.switch_error_func('LE',obs,pred)
             count = 0
@@ -3100,7 +3129,9 @@ def time_profile_intuitive_metrics(df, dict, model, energy_key,
               'Pearson Correlation Coefficient (log)': sepRlog, 'Spearman Correlation Coefficient': sepSlin, 
               'Within a Factor of 10': sepfact10, 'Within a Factor of 2': sepfact2}
     
+    
     if len(errors['Mean Ratio']) != 0:
+        #
         sub = sub.assign(**errors)
     
     #Write out selections and the metrics associated with each profile match
@@ -3512,12 +3543,20 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
             row = sep_sub.iloc[idx].to_list()
             #Calculate AWT
             issue_time = sep_sub.iloc[idx]['Forecast Issue Time']
+            if type(issue_time) == str:
+                format_code = "%Y-%m-%d %H:%M:%S"
+                issue_time = datetime.datetime.strptime(issue_time, format_code)
 
             if pd.isnull(issue_time):
                 continue
             
             tct = sep_sub.iloc[idx]['Observed SEP Threshold Crossing Time']
+            if type(tct) == str:
+                format_code = "%Y-%m-%d %H:%M:%S"
+                tct = datetime.datetime.strptime(tct, format_code)
+            
             tc_awt = (tct - issue_time).total_seconds()/(60.*60.) #hours
+            
             #If issue time is more than 7 days later than the threshold crossing time,
             #the assume this is not a realistic issue time and ignore
             if tc_awt < -7.*24.:
@@ -3534,7 +3573,12 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
 
             if ftype['obs_key'] != '':
                 tm = sep_sub.iloc[idx][ftype['obs_key']]
+                if type(tm) == str:
+                    format_code = "%Y-%m-%d %H:%M:%S"
+                    tm = datetime.datetime.strptime(tm, format_code)
+               
                 obs_awt = (tm - issue_time).total_seconds()/(60.*60.)
+                
                 #If issue time is more than 7 days later than the observed time,
                 #the assume this is not a realistic issue time and ignore
                 if obs_awt < -7.*24.:
@@ -3543,6 +3587,9 @@ def awt_metrics(df, dict, model, energy_key, thresh_key, validation_type):
 
             if ftype['obs_key'] == '': 
                 tc_tat = sep_sub.iloc[idx]["Trigger Advance Time"]
+                if type(tc_tat) == str and tc_tat != 'NaT':
+                    format_code = "%Y-%m-%d %H:%M:%S"
+                    tc_tat = datetime.datetime.strptime(tc_tat, format_code)
                 if pd.isnull(tc_awt) or tc_tat == 'NaT':
                     awteff = 0.0
                 else:
@@ -3698,15 +3745,15 @@ def pretty(d, indent=0):
          print('\t' * (indent+1) + str(value))
 
 
-def profile_output(sphinx_dataframe, resume_obs, resume_model):
+def profile_output(sphinx_dataframe, resume_obs, resume_model, dum_profiles):
     
     # Is there a point to 'resume' for the profiles? 
     u_obs_profs = resume.identify_unique(sphinx_dataframe, 'Observed Time Profile')
     
     u_model_profs = resume.identify_unique(sphinx_dataframe, 'Predicted Time Profile')
     
-  
-
+    
+    
     observed_profs = {}
     model_profs = {}
     for u in u_obs_profs:
@@ -3718,21 +3765,20 @@ def profile_output(sphinx_dataframe, resume_obs, resume_model):
                 obs_dates = [x.strftime('%Y-%m-%dT%H:%M:%SZ') for x in obs_dates]
                 observed_profs[u_i] = {'dates': obs_dates, 'fluxes': obs_profiles}
     for um in u_model_profs:
-        if resume_model is not None and um in resume_model:
+        if resume_model is not None and um in resume_model or um in dum_profiles:
             continue
         else:
             for um_i in um.rsplit(','):
                 model_dates, model_profiles = profile.read_single_time_profile(um_i)
                 model_dates = [x.strftime('%Y-%m-%dT%H:%M:%SZ') for x in model_dates]
                 model_profs[um_i] = {'dates': model_dates, 'fluxes': model_profiles}
-
-
+    if dum_profiles is not None:
+        model_profs = dum_profiles | model_profs
     if resume_obs is not None:
         observed_profs = resume_obs | observed_profs
     if resume_model is not None:
         model_profs = resume_model | model_profs
 
- 
     obs_file_path = os.path.join(config.outpath,os.path.join('json', 'observed_profiles.json'))
     with open(obs_file_path, 'w+') as json_file:
         json.dump(observed_profs, json_file, indent = 4)
@@ -3748,7 +3794,7 @@ def profile_output(sphinx_dataframe, resume_obs, resume_model):
     with open(pickle_file_path, 'wb') as f:
         pickle.dump(model_profs, f)
 
-
+    # input()
 
     return
 
@@ -4028,9 +4074,10 @@ def intuitive_validation(evaluated_sphinx, removed_sphinx, model_names,
     ### RESUME WILL APPEND DF TO PREVIOUS DF
     if r_df is not None:
         logger.info("RESUME: Resuming from a previous run. Concatenating current and previous forecasts, ensuring that any duplicates are removed. ")
- 
         df = pd.concat([r_df, df], ignore_index=True)
+        
         df, duplicate_df = duplicates.remove_sphinx_duplicates(df,"Duplicate in resume dataframe")
+        
         #Add the duplicates discarded from df
         df_not = pd.concat([df_not,duplicate_df])
         logger.debug("RESUME: Completed concatenation and removed any duplicates. Writing SPHINX_evaluated dataframe to file.")
@@ -4040,9 +4087,19 @@ def intuitive_validation(evaluated_sphinx, removed_sphinx, model_names,
         all_observed_thresholds = resume.identify_thresholds_per_energy_channel(df)
     ### RESUME COMPLETED
 
-
+    
+    dum_toggle = True
+    dum_profs = None
+    if dum_toggle:
+        df, dum_profs = dums.feeder_from_sphinx(df)
+        model_names = resume.identify_unique(df, 'Model')
+        all_energy_channels = resume.identify_unique(df, 'Energy Channel Key')
+        all_observed_thresholds = resume.identify_thresholds_per_energy_channel(df)
+    
     #Write SPHINX dataframe to file
     write_df(df, "SPHINX_evaluated")
+    profile_output(df, r_obs, r_mod, dum_profs)
+    
     logger.debug("Completed writing SPHINX_evaluated dataframe to file.")
 
     #Write NOT EVALUATED SPHINX dataframe to file
@@ -4060,7 +4117,7 @@ def intuitive_validation(evaluated_sphinx, removed_sphinx, model_names,
     
     
 
-    profile_output(df, r_obs, r_mod)
+    
 
     logger.info("intuitive_validation: Validation process complete.")
 

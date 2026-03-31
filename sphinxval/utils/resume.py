@@ -3,6 +3,7 @@ import datetime
 import pandas as pd
 import pickle
 import logging
+import os
 
 __author__ = "Katie Whitman"
 __maintainer__ = "Katie Whitman"
@@ -22,7 +23,10 @@ def read_in_df(filename):
     """
     try:
         pklfile = open(filename,"rb")
-        df = pickle.load(pklfile)
+        logger.info(pklfile)
+        logger.info('Resume file is a file ' + str(os.path.isfile(filename)))
+        df_temp = pickle.load(pklfile)
+        df = df_temp #.drop(columns=df_temp.columns[0])
         return df
     except:
         logger.error("Cannot open pickle file containing "

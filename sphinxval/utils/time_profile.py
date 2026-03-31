@@ -101,9 +101,9 @@ def read_single_time_profile(filename):
     with open(filename) as ofile:
         for row in ofile:
             if row == '': continue
+            
             row = row.lstrip().strip()
             if row[0] == "#": continue
-    
             row = row.split()
             zulutime = row[0]
             dt = vjson.zulu_to_time(zulutime)
