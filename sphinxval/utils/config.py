@@ -10,6 +10,9 @@ referencepath = './reference'
 reportpath = './reports'
 logpath = './logs'
 baseurlpath = None
+#profile paths
+model_prof_path = './output/json/model_profiles.json'
+obs_prof_path = './output/json/observed_profiles.json'
 #baseurlpath = 'https://web-dev.ccmc.smce.nasa.gov:8001/sphinx'
 
 ######SHORTNAME#####
@@ -87,7 +90,7 @@ peak_flux_cut = 8e-1
 #predicted energy channels and thresholds, but not exactly the same.
 #Only one excepted case allowed in current version.
 #Set do_mismatch = True to allow comparison of mismatched energy channels and thresholds
-do_mismatch = False
+do_mismatch = True
 
 #mm stands for "mismatch"
 #WRITE UNITS IN SAME FORMAT AS REQUESTED FOR SEP SCOREBOARDS
@@ -137,6 +140,10 @@ mm_thresh_key = mm_obs_tk + "_" + mm_pred_tk
 ######## END MISMATCH ############
 
 
+###Uncertainty Boolean
+uncert_boolean = False
+uncert_n_resamples = 10000
+uncert_fraction = 0.75
 
 # METRICS TO BE REPORTED AS A PERCENTAGE
 in_percent = ["Mean Percent Error (MPE)",
@@ -145,7 +152,9 @@ in_percent = ["Mean Percent Error (MPE)",
               "Mean Symmetric Absolute Percent Error (SMAPE)",
               "Median Symmetric Accuracy (MdSA)",
               "Mean Accuracy Ratio (MAR)",
-              "Prevalence Threshold"]
+              "Prevalence Threshold",
+              "Percentage within an Order of Magnitude (%)",
+              "Percentage within a factor of 2 (%)"]
 
 # SAVES THE CURRENT GIT COMMIT SHA HASH FOR LATER USE
 git_repo = git.Repo(search_parent_directories=True)

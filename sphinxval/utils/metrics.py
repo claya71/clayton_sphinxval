@@ -12,6 +12,9 @@ import sklearn.metrics as skl
 import sys
 import logging
 
+import matplotlib.pyplot as plt
+from sphinxval.utils.tau import Tau, ContingencySpace, ConfusionMatrix
+
 __author__ = "Phil Quinn"
 __maintainer__ = "Kathryn Whitman"
 __email__ = "kathryn.whitman@nasa.gov"
@@ -1320,14 +1323,11 @@ def contingency_scores(h,m,f,c):
     'MARK': check_div(h, h+f) + check_div(c, m+c) - 1,  # Markedness
     'PT': calc_PT(h, m, f ,c),                         # Prevalence Threshold
     'BA': check_div(check_div(h, h+m)+check_div(c, f+c), 2), # Balanced Accuracy
-    'FM': np.sqrt(check_div(h, h+f)*check_div(h, h+m))  # Fowlkes-Mallows Index (Geometric mean of precision and recall)
+    'FM': np.sqrt(check_div(h, h+f)*check_div(h, h+m)),  # Fowlkes-Mallows Index (Geometric mean of precision and recall)
+    'FAER' : check_div(f, h+m),                          # False Alarm Event Ratio
+    'Tau': None
     }
-    #### Just doing some testing here with likelihood ratios, keep commented out for now
-    # print(df[obs_key], df[pred_key])
-    # clr_pos = check_div(h, h+m) / (1-check_div(c, c+f))
-    # clr_neg = (1-check_div(h, h+m)) / check_div(c, c+f)
-    # print(clr_pos, clr_neg)
-    # input()
+
     
     return scores
 
@@ -1422,6 +1422,9 @@ def calc_contingency_all_clear(df, obs_key, pred_key):
     c = result.sum(axis=0)
     
     scores = contingency_scores(h,m,f,c)
+
+    tau = calc_tau(h, m, f, c, df.iloc[0, 0], df.iloc[0, 1])
+    scores['Tau'] = tau
     return scores
 
 
@@ -1567,3 +1570,22 @@ def remove_zero(obs, model):
         del model_clean[bad]
 
     return obs_clean, model_clean
+
+def calc_tau(h, m, f, c, model_name, energy_channel, visualize = False):
+        if visualize:
+            try:
+                matrix = {'t': [h, m], 'f': [f, c]}
+            
+                fig = plt.figure(figsize=(20, 16))
+                ax = fig.add_subplot(111)#, projection='2d')
+                cs = ContingencySpace([ConfusionMatrix(matrix)])
+                cs.visualize(metric=Tau(cm = ConfusionMatrix(matrix), do_normalize = False), labels = model_name, projection='2d', title='Tau', ax = ax, step_size = 20, lines = False)
+                fig.savefig('./output/plots/tau_2d_' + model_name + '_' + energy_channel + '.png', dpi=600, bbox_inches='tight')
+                plt.close()
+            except:
+                logger.info('Welp I tried but it failed, next model')
+
+        tau  = 1 - (np.sqrt((f/(c + f))**2 + (m/(h + m))**2)/np.sqrt(2))
+        return tau
+
+    

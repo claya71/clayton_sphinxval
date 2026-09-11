@@ -13,7 +13,7 @@ __version__ = "1.0"
 __author__ = "Clayton Allison"
 
 
-# Updated July 31, 2024
+# Updated Aug 26, 2026
 
 # test_metrics.py
 # Metrics.py unittest file
@@ -46,89 +46,7 @@ __author__ = "Clayton Allison"
 # detailed than a normal unittest.
 
 # The output from running this command is:
-# test_cont_complex_table (tests.test_metrics.ContigencyMetricsTestCase.
-#     test_cont_complex_table) ... ok
-# test_cont_mixed_table (tests.test_metrics.ContigencyMetricsTestCase.
-#     test_cont_mixed_table) ... ok
-# test_cont_only_correct_negatives (tests.test_metrics.
-#     ContigencyMetricsTestCase.test_cont_only_correct_negatives) ... ok
-# test_cont_only_false_alarms (tests.test_metrics.
-#     ContigencyMetricsTestCase.test_cont_only_false_alarms) ... ok
-# test_cont_only_hits (tests.test_metrics.ContigencyMetricsTestCase.
-#     test_cont_only_hits) ... ok
-# test_cont_only_misses (tests.test_metrics.ContigencyMetricsTestCase.
-#     test_cont_only_misses) ... ok
-# test_all_flux_metrics_switch_func (tests.test_metrics.
-#     FluxMetricsTestCase.test_all_flux_metrics_switch_func) ... ok
-# test_flux_metric_absolute_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_absolute_error_calcs) ... ok
-# test_flux_metric_absolute_log_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_absolute_log_error_calcs)
-#          ... ok
-# test_flux_metric_absolute_percent_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_absolute_percent_error_calcs)
-#          ... ok
-# test_flux_metric_error_calcs (tests.test_metrics.FluxMetricsTestCase.
-#     test_flux_metric_error_calcs) ... ok
-# test_flux_metric_log_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_log_error_calcs) ... ok
-# test_flux_metric_mean_acc_ratio_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_mean_acc_ratio_calcs) ... ok
-# test_flux_metric_med_symm_acc_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_med_symm_acc_calcs) ... ok
-# test_flux_metric_pearson_linear_corr_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_pearson_linear_corr_calcs)
-#          ... ok
-# test_flux_metric_pearson_log_corr_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_pearson_log_corr_calcs) ... ok
-# test_flux_metric_percent_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_percent_error_calcs) ... ok
-# test_flux_metric_root_mean_squared_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_root_mean_squared_error_calcs)
-#         ... ok
-# test_flux_metric_root_mean_squared_log_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_root_mean_squared_
-#         log_error_calcs) ... ok
-# test_flux_metric_spearman_corr_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_spearman_corr_calcs) ... ok
-# test_flux_metric_squared_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_squared_error_calcs) ... ok
-# test_flux_metric_squared_log_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_squared_log_error_calcs)
-#         ... ok
-# test_flux_metric_symmetric_absolute_percent_error_calcs (tests.
-#     test_metrics.FluxMetricsTestCase.test_flux_metric_symmetric_
-#         absolute_percent_error_calcs) ... ok
-# test_flux_metric_symmetric_percent_error_calcs (tests.test_metrics.
-#     FluxMetricsTestCase.test_flux_metric_symmetric_percent_error_calcs)
-#         ... ok
-# test_prob_area_under_roc_curve (tests.test_metrics.
-#     ProbabilityMetricsTestCase.test_prob_area_under_roc_curve) ...
-#         C:\Users\cfalliso\AppData\Local\Programs\Python\Python311
-#         Lib\site-packages\sklearn\metrics\_ranking.py:1124:
-#         UndefinedMetricWarning: No negative samples in y_true, false
-#         positive value should be meaningless
-#     warnings.warn(
-#     ok
-# test_prob_brier (tests.test_metrics.
-#     ProbabilityMetricsTestCase.test_prob_brier) ... ok
-# test_prob_brier_skill (tests.test_metrics.
-#     ProbabilityMetricsTestCase.test_prob_brier_skill) ... ok
-# test_prob_pearson_lin (tests.test_metrics.
-#     ProbabilityMetricsTestCase.test_prob_pearson_lin) ... ok
-# test_time_mean_absolue_error (tests.test_metrics.
-#     TimeMetricsTestCase.test_time_mean_absolue_error) ... ok
-# test_time_mean_error (tests.test_metrics.
-#     TimeMetricsTestCase.test_time_mean_error) ... ok
-# test_time_median_absolute_error (tests.test_metrics.
-#     TimeMetricsTestCase.test_time_median_absolute_error) ... ok
-# test_time_median_error (tests.test_metrics.
-#     TimeMetricsTestCase.test_time_median_error) ... ok
 
-# ----------------------------------------------------------------------
-# Ran 32 tests in 0.042s
-
-# OK
 
 # More on Unittests can be found at:
 # https://docs.python.org/3/library/unittest.html
@@ -1158,6 +1076,12 @@ class ContigencyMetricsTestCase(unittest.TestCase):
             elif score == 'FM':
                 self.assertAlmostEqual(result[score],1)
                 # Fowlkes-Mallows Index = Sqrt((h/(h+f))*(h/(h+m))) = sqrt((1/(1+0))*((1/(1+0)))
+            elif score == 'FAER':
+                self.assertAlmostEqual(result[score],0)
+                # FAER = f / (h + m) = 0 / (1 + 0)
+            elif score == 'Tau':
+                self.assertTrue(math.isnan(result[score]))
+                # Tau = 1 - (np.sqrt((f/(c + f))**2 + (m/(h + m))**2)/np.sqrt(2)) = 1 - sqrt((0 / 0)^2 + (0/(1 + 0))^2 )
 
 
 
@@ -1268,6 +1192,12 @@ class ContigencyMetricsTestCase(unittest.TestCase):
             elif score == 'FM':
                 self.assertTrue(math.isnan(result[score]))
                 # Fowlkes-Mallows Index = Sqrt((h/(h+f))*(h/(h+m))) = sqrt((0/(0+0))*((0/(0+1)))
+            elif score == 'FAER':
+                self.assertAlmostEqual(result[score],0)
+                # FAER = f / (h + m) = 0 / (0 + 1)
+            elif score == 'Tau':
+                self.assertTrue(math.isnan(result[score]))
+                # Tau = 1 - (np.sqrt((f/(c + f))**2 + (m/(h + m))**2)/np.sqrt(2)) = 1 - sqrt((0 / 0)^2 + (1/(1 + 0))^2 )
 
         
 
@@ -1377,6 +1307,12 @@ class ContigencyMetricsTestCase(unittest.TestCase):
             elif score == 'FM':
                 self.assertTrue(math.isnan(result[score]))
                 # Fowlkes-Mallows Index = Sqrt((h/(h+f))*(h/(h+m))) = sqrt((0/(0+1))*((0/(0+0)))
+            elif score == 'FAER':
+                self.assertAlmostEqual(result[score], np.inf)
+                # FAER = f / (h + m) = 1 / (0 + 0)
+            elif score == 'Tau':
+                self.assertTrue(math.isnan(result[score]))
+                # Tau = 1 - (np.sqrt((f/(c + f))**2 + (m/(h + m))**2)/np.sqrt(2)) = 1 - sqrt((1 / 1)^2 + (0/(0 + 0))^2 )
 
 
     def test_cont_only_correct_negatives(self):
@@ -1485,6 +1421,12 @@ class ContigencyMetricsTestCase(unittest.TestCase):
             elif score == 'FM':
                 self.assertTrue(math.isnan(result[score]))
                 # Fowlkes-Mallows Index = Sqrt((h/(h+f))*(h/(h+m))) = sqrt((0/(0+0))*((0/(0+0)))
+            elif score == 'FAER':
+                self.assertTrue(math.isnan(result[score]))
+                # FAER = f / (h + m) = 0 / (0 + 0)
+            elif score == 'Tau':
+                self.assertTrue(math.isnan(result[score]))
+                # Tau = 1 - (np.sqrt((f/(c + f))**2 + (m/(h + m))**2)/np.sqrt(2)) = 1 - sqrt((0 / 1)^2 + (0/(0 + 0))^2 )
     
     
     def test_cont_mixed_table(self):
@@ -1590,6 +1532,13 @@ class ContigencyMetricsTestCase(unittest.TestCase):
             elif score == 'FM':
                 self.assertAlmostEqual(result[score],1/2)
                 # Fowlkes-Mallows Index = Sqrt((h/(h+f))*(h/(h+m))) = sqrt((1/(1+1))*((1/(1+1)))
+            elif score == 'FAER':
+                self.assertAlmostEqual(result[score],1/2)
+                # FAER = f / (h + m) = 1 / (1 + 1)
+            elif score == 'Tau':
+                self.assertAlmostEqual(result[score],1/2)
+                # Tau = 1 - (np.sqrt((f/(c + f))**2 + (m/(h + m))**2)/np.sqrt(2)) = 1 - sqrt((1 / (1+1))^2 + (1/(1 + 1))^2 )
+            
 
 
 
@@ -1696,6 +1645,13 @@ class ContigencyMetricsTestCase(unittest.TestCase):
             elif score == 'FM':
                 self.assertAlmostEqual(result[score], np.sqrt(1/12))
                 # Fowlkes-Mallows Index = Sqrt((h/(h+f))*(h/(h+m))) = sqrt((1/(1+3))*((1/(1+2)))
+            elif score == 'FAER':
+                self.assertAlmostEqual(result[score],1)
+                # FAER = f / (h + m) = 3 / (1 + 2)
+            elif score == 'Tau':
+                self.assertAlmostEqual(result[score],0.43959036686000863)
+                # Tau = 1 - (np.sqrt((f/(c + f))**2 + (m/(h + m))**2)/np.sqrt(2)) = 1 - sqrt((3 / (4+3))^2 + (2/(1 + 2))^2 )
+            
              
     
     def test_cont_garbage(self):

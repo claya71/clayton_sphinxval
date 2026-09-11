@@ -450,6 +450,7 @@ class Test_Resume(unittest.TestCase):
         for the various quantities as well as the selections for those quantities for each model
 
         """
+        validate.profile_output(self.df, None, None) # Moved this step here to make things work - won't test for the profile existence until later
         validate.calculate_intuitive_metrics(self.df, self.model_names, self.all_energy_channels, \
                 self.all_observed_thresholds, 'All')
         # taking the 'easy way' of doing this test- just going to check that there are outputs for each
@@ -462,9 +463,9 @@ class Test_Resume(unittest.TestCase):
         for model in self.model_names:
             for quantities in self.validation_quantity:
                
-                metrics_filename = './tests/output/csv/' + quantities + '_metrics' 
+                metrics_filename = os.path.join('.', 'tests', 'output', 'csv', quantities + '_metrics')#'./tests/output/csv/' + quantities + '_metrics' 
                 self.assertTrue(os.path.isfile(metrics_filename + '.csv'), msg = metrics_filename + '.csv does not exist, check the file is output correctly')
-                metrics_filename = './tests/output/pkl/' + quantities + '_metrics' 
+                metrics_filename = os.path.join('.', 'tests', 'output', 'pkl', quantities + '_metrics')
                 self.assertTrue(os.path.isfile(metrics_filename + '.pkl'), msg = metrics_filename + '.pkl does not exist, check the file is output correctly')
                 
                 
@@ -472,11 +473,11 @@ class Test_Resume(unittest.TestCase):
                     for thresholds in self.obs_thresholds[energy_channels]:
                         threshold_shortened = thresholds.rsplit('.')[0]+ '_' + thresholds.rsplit('.')[1] + '.' + thresholds.rsplit('.')[2]
 
-                        pkl_filename = './tests/output/pkl/' + quantities + '_selections_' + model + '_' + energy_channels + '_' + threshold_shortened + '.pkl'
-                        csv_filename = './tests/output/csv/' + quantities + '_selections_' + model + '_' + energy_channels + '_' + threshold_shortened + '.csv'
+                        pkl_filename = os.path.join('.', 'tests', 'output', 'pkl', quantities + '_selections_' + model + '_' + energy_channels + '_' + threshold_shortened)
+                        csv_filename = os.path.join('.', 'tests', 'output', 'csv', quantities + '_selections_' + model + '_' + energy_channels + '_' + threshold_shortened)
                     
-                        self.assertTrue(os.path.isfile(pkl_filename), msg = pkl_filename + ' does not exist, check the file is output correctly')
-                        self.assertTrue(os.path.isfile(csv_filename), msg = csv_filename + ' does not exist, check the file is output correctly')
+                        self.assertTrue(os.path.isfile(pkl_filename + '.pkl'), msg = pkl_filename + '.pkl does not exist, check the file is output correctly')
+                        self.assertTrue(os.path.isfile(csv_filename + '.csv'), msg = csv_filename + '.csv does not exist, check the file is output correctly')
                             
     def step_4(self):
         self.r_obs_prof, self.r_model_prof = mock_profile_output()
@@ -485,8 +486,9 @@ class Test_Resume(unittest.TestCase):
         # self.r_obs
         # self.r_mod
         validate.profile_output(self.df, self.r_obs_prof, self.r_model_prof)
-        obs_prof_filename = './tests/output/json/observed_profiles.json'
-        model_prof_filename = './tests/output/json/model_profiles.json'
+        obs_prof_filename = os.path.join('.', 'tests', 'output', 'json', 'observed_profiles.json') 
+        model_prof_filename =  os.path.join('.', 'tests', 'output', 'json', 'model_profiles.json') 
+        
         self.assertTrue(os.path.isfile(obs_prof_filename), msg = obs_prof_filename + ' does not exist, check the file is output correctly')
         self.assertTrue(os.path.isfile(model_prof_filename), msg = model_prof_filename + ' does not exist, check the file is output correctly')
         
@@ -514,6 +516,10 @@ class Test_Resume(unittest.TestCase):
     @patch('sphinxval.utils.config.mm_obs_threshold', config_tests.mm_obs_threshold)
     @patch('sphinxval.utils.config.mm_obs_ek', config_tests.mm_obs_ek)
     @patch('sphinxval.utils.config.mm_obs_tk', config_tests.mm_obs_tk)
+    @patch('sphinxval.utils.config.uncert_boolean', False)
+    @patch('sphinxval.utils.config.uncert_n_resamples', 1)
+    @patch('sphinxval.utils.config.model_prof_path', './tests/output/json/model_profiles.json')
+    @patch('sphinxval.utils.config.obs_prof_path', './tests/output/json/observed_profiles.json')
     
     def test_all(self):
         utils.utility_delete_output()
