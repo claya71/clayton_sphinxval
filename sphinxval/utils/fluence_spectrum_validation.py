@@ -1,5 +1,8 @@
-from . import config
+from . import config as cfg
 from . import plotting_tools
+from . import units_handler as vunits
+from . import metrics_dicts
+from . import plotting_tools as plt_tools
 import argparse
 import numpy as np
 import datetime
@@ -19,20 +22,190 @@ import re
 import csv
 import seaborn as sns
 from pathlib import Path
+import logging
+import pandas as pd
 
 """
-The first part of this code (most of it) is all commented out until a later date. It involves fitting
-the fluence spectrum to a Band Function or an Ellison Ramaty (powerlaw with an exponential rollover)
-and comparing the fit parameters for the observations and the model. The idea is that the physics can
-more easily be seen in the fit parameters (rollover energy, low energy spectral slope, high energy spectral slope)
-compared to just looking at the error in individual energy bins. Looking at how these fit parameters
-vary across the event set can tell you if the physics contained within a fluence spectrum is being
-appropriately modeled (rollover energy and spectral slope).
+Fluence Spectrum validation has its own dedicated python file to house its subroutines
+to keep the length of validation.py in check. Additionally this file will act in similar
+ways to metrics.py since it will be calculating metrics. 
+
+
+The first part of this code involves fitting the fluence spectrum to a Band Function or an Ellison Ramaty 
+(powerlaw with an exponential rollover) and comparing the fit parameters for the observations and the model. 
+The idea is that the physics can more easily be seen in the fit parameters (rollover energy, 
+low energy spectral slope, high energy spectral slope) compared to just looking at the error in individual
+energy bins. Looking at how these fit parameters vary across the event set can tell you if the physics 
+contained within a fluence spectrum is being appropriately modeled (rollover energy and spectral slope).
 
 Second part of handles a simpler error calculation between the model energy bins individual fluence
 and the observed fluence for the same energy bin, interpolated if required.
 
 """
+
+#Create logger
+logger = logging.getLogger(__name__)
+mpl_logger = logging.getLogger("matplotlib")
+mpl_logger.setLevel(logging.WARNING)
+
+def from_differential_to_integral_flux(min_energy, energy_bins,
+    fluxes, energy_bin_centers=[]):
+    """ If user selected differential fluxes, convert to integral fluxes to
+        caluculate operational threshold crossings (>10 MeV protons exceed 10
+        pfu, >100 MeV protons exceed 1 pfu).
+        Assume that the measured fluxes correspond to the center of the energy
+        bin and use power law interpolation to extrapolate integral fluxes
+        above user input min_energy.
+        The intent is to calculate >10 MeV and >100 MeV fluxes, but leaving
+        flexibility for user to define the minimum energy for the integral flux.
+        An integral flux will be provided for each timestamp (e.g. every 5 mins).
+
+        Note that if bad values were not interpolated in previous steps,
+        they will have been set to None in check_for_bad_data, which translated
+        to NaN in numpy arrays.
+
+       If GOES-13, -14, -15, then the 110 - 900 MeV bin is not included when
+       estimating the integral fluxes .
+       This bin's energy appears to be unreliable and the other energy
+       bins cover this range.
+
+        INPUTS:
+
+        :min_energy: (float) - bottom energy for integral flux calculation
+        :energy_bins: (float nx2 array) - bins for each energy channel
+            [[Emin1, Emax1], [Emin2, Emax2], [], ...]
+        :fluxes: (float nxm array) - fluxes with time for each energy channel
+       
+
+        OUTPUTS:
+
+        :integral_fluxes: (float 1xm array) - estimate integral flux for >min_energy
+            (Returns all zero values if no energy bins above min_energy)
+
+    """
+    print(f"Converting differential flux to integral flux for >{min_energy} MeV.")
+    nbins = len(energy_bins)
+    nflux = len(fluxes[0])
+    #Check requested min_energy inside data energy range
+    if min_energy < energy_bins[0][0] or min_energy >= energy_bins[nbins-1][0]:
+        print(f"The selected minimum energy {min_energy} to create "
+               + "integral fluxes is outside of the range of the data: "
+                + f"{energy_bins[0][0]}  - {max(energy_bins[nbins-1][0],energy_bins[nbins-1][1])}")
+        print(f"Setting all >{min_energy} fluxes to zero.")
+        integral_fluxes = [0]*nflux
+        return integral_fluxes
+
+    #Calculate bin center in log space for each energy bin
+    bin_center = []
+    if len(energy_bin_centers) != 0:
+        bin_center = energy_bin_centers
+    else:
+        for i in range(nbins):
+            if energy_bins[i][1] != -1:
+                centerE = math.sqrt(energy_bins[i][0]*energy_bins[i][1])
+            else:
+                centerE = -1 #integral bin
+            bin_center.append(centerE)
+
+    #The highest energy EPEAD bin overlaps with all of the HEPAD bins
+    #For this reason, excluding the highest energy EPEAD bin in
+    #integral flux estimation, 110 - 900 MeV
+    if (experiment == "GOES-13" or experiment == "GOES-14" or
+        experiment == "GOES-15"):
+        remove_bin = -1
+        for i in range(nbins):
+            if energy_bins[i][0] == 110 and energy_bins[i][1] == 900:
+                remove_bin = i
+        if remove_bin == -1:
+            sys.exit("Attempting to remove 110 - 900 MeV bin for "
+                    + experiment + '. Cannot locate bin. Please check '
+                    'define_energy_bins to see if GOES-13 to GOES-15 bins '
+                    'include 110 - 900 MeV. if not please comment out this '
+                    'section in tools.py from_differential_to_integral_flux.')
+        fluxes = np.delete(fluxes,remove_bin,0)
+        energy_bins = np.delete(energy_bins,remove_bin,0)
+        bin_center = np.delete(bin_center,remove_bin,0)
+        nbins = nbins-1
+
+    #integrate by power law interpolation; assume spectrum the shape of a
+    #power law from one bin center to the next. This accounts for the case
+    #where the minimum energy falls inside of a bin or there are overlapping
+    #energy bins or gaps between bins.
+    #An energy bin value of -1 (e.g. [700,-1]) indicates infinity - already an
+    #integral channel. This happens for HEPAD. If the integral channel is the
+    #last channel, then the flux will be added. If it is a middle bin, it will
+    #be skipped.
+    integral_fluxes = []
+    integral_fluxes_check = []
+    for j in range(nflux):  #flux at each time
+        sum_flux = 0
+        ninc = 0 #number of energy bins included in integral flux estimate
+        for i in range(nbins-1):
+            if bin_center[i+1] < min_energy:
+                continue
+            else:
+                if energy_bins[i][1] == -1 or energy_bins[i+1][1] == -1:
+                    #bin is already an integral flux, e.g. last HEPAD bin
+                    continue
+                if pd.isnull(fluxes[i,j]) or pd.isnull(fluxes[i+1,j]): #data gap
+                    continue
+
+                if fluxes[i,j] < 0 or fluxes[i+1,j] < 0: #bad data
+                    sys.exit("from_differential_to_integral_flux: "
+                            + f"Bad flux data value of {fluxes[i,j]} and "
+                            + f"{fluxes[i+1,j]} found for bin {i}, {j}. "
+                            + "This should not happen. Did you call check_for_bad_data() first?")
+
+
+                if fluxes[i,j] == 0 or fluxes[i+1,j] == 0: #add 0 flux
+                    ninc = ninc + 1
+                    continue
+
+                F1 = fluxes[i,j]
+                F2 = fluxes[i+1,j]
+                if F1 == 0 or pd.isnull(F1):
+                    sys.exit("from_differential_to_integral_flux: found bin flux of "
+                            + f"{fluxes[i,j]}. Should not happen here, "
+                            + f"bin [i,j] [{i},{j}]." )
+
+                if F2 == 0 or pd.isnull(F2):
+                    sys.exit("from_differential_to_integral_flux: found bin flux of "
+                            + f"{fluxes[i+1,j]}. Should not happen here, "
+                            + f"bin [i+1,j] [{i+1},{j}]." )
+
+                logF1 = np.log(F1)
+                logF2 = np.log(F2)
+                logE1 = np.log(bin_center[i])
+                logE2 = np.log(bin_center[i+1])
+                endE = bin_center[i+1]
+                if i+1 == nbins-1:
+                    endE = energy_bins[nbins-1][1] #extend to edge of last bin
+
+                f = lambda x:exp(logF1
+                            + (np.log(x)-logE1)*(logF2-logF1)/(logE2-logE1))
+                startE = max(bin_center[i],min_energy)
+                fint = scipy.integrate.quad(f,startE,endE)
+                if math.isnan(fint[0]):
+                    print("from_differential_to_integral_flux: flux integral"
+                        "across bins is NaN. Setting to zero. Bin values are "
+                        + str(F1) + ' and ' + str(F2))
+                    fint = [0]
+                if fint[0] < 1e-10:
+                    fint = [0]
+                sum_flux = sum_flux + fint[0]
+                ninc = ninc + 1
+
+        #if last bin is integral, add (HEPAD)
+        if energy_bins[nbins-1][1] == -1 and fluxes[nbins-1,j] >= 0:
+            intflx = fluxes[nbins-1,j]
+            sum_flux = sum_flux + intflx
+            ninc = ninc + 1
+
+        if ninc == 0:
+            sum_flux = np.nan
+        integral_fluxes.append(sum_flux)
+
+    return integral_fluxes
 
 def make_diff_from_int(integral_fluxes, energy_bins):
     """ Make differential fluxes from integral channels.
@@ -60,10 +233,20 @@ def make_diff_from_int(integral_fluxes, energy_bins):
     return diff_bins, diff_fluxes
 
 
+def differential_to_int_fluence(fluence_array):
+    # Quick and easy calculation of integral fluence from
+    # differential fluence:
+    # Add all fluence of higher energies to the lower energies fluence
+    int_fluence_array = []
+    for i in range(len(fluence_array)):
+        int_fluence_array.append(sum(fluence_array[i:]))
+
+    return int_fluence_array
+
 
 
 #################### Ellison Ramaty Function Subroutines ##################################################
-def fit_ellisonramaty_function(energy_bins, fluence_array, energy):
+def fit_ellisonramaty_function(energy_bins, fluence_array, date, fig_obj):
     """
     Fitting the Ellison-Ramaty Function to energy spectra
     Should work with observations or models 
@@ -80,458 +263,237 @@ def fit_ellisonramaty_function(energy_bins, fluence_array, energy):
     fit_er -  the final fit corresponding to the energy array - used for final plotting
     transition_er - the roll_over energy of the ellison-ramaty fit
     """
-    from lmfit import minimize, Parameters
+    #from lmfit import minimize, Parameters, Model
+    import lmfit
     import numpy as np
 
-    params_er = Parameters()
-    params_er.add('norm', value = 101, min = 1, max = 10**15)
-    params_er.add('gamma_er', value = 1.0, min = 0.0000001, max =10)
-    params_er.add('roll_over', value = 15.0, min = 1.0, max = 2000)
-    minimize_er = minimize(residual_er, params_er, args = [energy_bins, fluence_array], nan_policy= 'propagate', max_nfev= 10**8)
-    values_dict = minimize_er.params.valuesdict()
-    roll_over = values_dict['roll_over']
-    # if roll_over > 1000:
-    #     minimize_er, fit_er = fit_single_power_law(energy_bins, fluence_array, energy)
-    #     rolloverenergy_er = None
-    # else: 
-    fit_er, rolloverenergy_er = er_func(minimize_er.params, energy)
-
-    return minimize_er, fit_er, rolloverenergy_er
-
-def residual_er(first_guess, *args):
-    """
-    Defining the Ramaty-Ellison function - for minimization
-    """
-  
-    parvals = first_guess.valuesdict()
-    norm = parvals['norm']
-    gamma = parvals['gamma_er']
-    E_r = parvals['roll_over']
+    # new testing
+    model = lmfit.Model(ellisonramaty_function)
+    params = model.make_params()
+    params.add('norm', value = 10**9, min = 10**4, max = 10**12)
+    params.add('gamma_er', value = 1.25, min = 0.1, max =10)
+    params.add('E_r', value = 35.0, min = 1.0, max = 2000)
     
-    fluence = args[1]
-    energy = args[0]
 
     
-    fit_error = []
-    total_fit = []
-    e = 0
 
-    for e in range(len(energy)):
-        total_fit.append(norm*energy[e]**(-gamma)*math.exp(-energy[e]/E_r))
-        fit_error.append(np.abs((fluence[e] / total_fit[e])-1))
-        e = e+1
-   
-    return fit_error
 
-def er_func(first_guess, energy):
+    def fitting_routine(p, x, y):
+        fit_val = ellisonramaty_function(x, p['norm'], p['gamma_er'], p['E_r'])
+
+
+        
+        fit_val_safe = np.clip(fit_val, 1, None)
+        y_safe = np.clip(y, 1, None)
+        r = 0.20 # r is an error estimator that I'm using as a constant 20% across the spectra
+        sigma_log10 = r / (np.log(10))
+        
+        return (np.log10(y_safe) - np.log10(fit_val_safe)) / sigma_log10
+        
+
+    fitter = lmfit.Minimizer(fitting_routine, params, fcn_args=(energy_bins, fluence_array))
+    result_b = fitter.minimize(max_nfev= cfg.fit_iter)
+    plot_er_func(result_b.params, date, fig_obj)
+    print('fit report', energy_bins, lmfit.fit_report(result_b))
+
+    return result_b
+
+
+
+def plot_er_func(first_guess, date, figure_obj):
     """
     Defining the Ellison-Ramaty function for plotting the fit
     """
-    # print(args)
+    energy = np.arange(0,2000,0.1) # Creating an array of energies across all bins (0 - 2000 MeV) to use for plotting the end fit
     parvals = first_guess.valuesdict()
     norm = parvals['norm']
     gamma = parvals['gamma_er']
-    E_r = parvals['roll_over']
+    E_r = parvals['E_r']
    
-    fit = []
-    e = 0
+    fit = ellisonramaty_function(energy, norm, gamma, E_r)
 
-    for e in range(len(energy)):
-        
-        fit.append(norm*energy[e]**(-gamma)*math.exp(-energy[e]/E_r))
-        # fit = band[e]*math.exp(-energy[e]/E_r)
-        e = e+1
-
+    figure_obj.plot(energy, fit)
+    figure_obj.set_title('Ellison-Ramaty Fit ' + str(date))
     return fit, E_r
 
 
 
+def ellisonramaty_function(x, norm, gamma_er, E_r):
+    return norm*x**(-gamma_er)*np.exp(-x/E_r)
+
+
 ###################### Band Function Subroutines ##############################################
-def fit_band_function(energy_bins, fluence_array, energy):
+def fit_band_function(energy_bins, fluence_array, date, fig_obj):
     """ Fitting the Band function to spectral data - see
     description of fit_ellisonramaty_function for full details of 
     inputs/outputs
     """
-    from lmfit import minimize, Parameters
+    import lmfit
     import numpy as np
     params_band = Parameters()
-    params_band.add('norm', value = 10000.0, min = 1.0, max = 10**13)
-    params_band.add('gamma_b', value = 5.0, min = 0.1, max =20)
-    params_band.add('break_energy', value = 7.0, min = 5.0, max = 1000)
-    params_band.add('gamma_a', value = 0.70, min = 0.1, max = 4.0)
-    minimize_band = minimize(residual_band, params_band, args= [energy_bins, fluence_array], nan_policy= 'propagate', max_nfev= 100000000)
+    params_band.add('norm', value = 10**5, min = 10**4, max = 10**12)
+    params_band.add('gamma_a', value = 0.70, min = 0.1, max =4)
+    params_band.add('gamma_b', value = 5.0, min = 4.1, max = 10)
+    params_band.add('E_0', value = 70.0, min = 10.0, max = 1000)
     
-    fit_band, transition_band = band_func(minimize_band.params, energy) #Band
-    return minimize_band, fit_band, transition_band
-
-def residual_band(first_guess, *args):
-    """
-    Defining the Band function for minimization
-
-    Inputs:
-    First Guess. Array of length 5, first guess for the values
-        the free parameters will take.
-        Norm - normalization factor (A)
-        Gamma_a - low energy spectral index
-        Gamma_b - high energy spectral index
-        E_0 -  break energy
-       
-
-    args. Array of length 2, contains any other arguments used in the function
-        since least_squares requires functions of the form func(x, *args)
-        args[0] - energy bins
-        args[1] - fluence values       
-    """
-    parvals = first_guess.valuesdict()
-    norm = parvals['norm']
-    gamma_a = parvals['gamma_a']
-    gamma_b = parvals['gamma_b']
-    E_0 = parvals['break_energy']
-
+    
 
     
-    fluence = args[1]
-    energy = args[0]
+    def fitting_routine(p, x, y):
+        model_val = band_function(x, p['norm'], p['gamma_a'], p['gamma_b'], p['E_0'])
+        model_val_safe = np.clip(model_val, 1, None)
+        y_safe = np.clip(y, 1, None)
+        r = 0.20 # r is an error estimator that I'm using as a constant 20% across the spectra
+        sigma_log10 = r / (np.log(10))
+        return (np.log10(y_safe) - np.log10(model_val_safe)) / sigma_log10
 
-    band = []
-    fit_error = []
-    total_fit = []
-    e = 0
+    fitter = lmfit.Minimizer(fitting_routine, params_band, fcn_args=(energy_bins, fluence_array))
+    result_b = fitter.minimize(max_nfev= cfg.fit_iter)
+    plot_band_func(result_b.params, date, fig_obj)
+    print('fit report', energy_bins, lmfit.fit_report(result_b))
 
-    E_t = (gamma_b - gamma_a)*E_0
+    return result_b
 
-    for e in range(len(energy)-1):
-        
-        if energy[e] <= E_t:
 
-            band.append(norm*energy[e]**(-gamma_a)*math.exp(-energy[e] / E_0))
-            
-        else:
-            band.append(norm*energy[e]**(-gamma_b)*(((gamma_b-gamma_a)*E_0)**(gamma_b-gamma_a))*math.exp(gamma_a-gamma_b))   
-        total_fit.append((band[e]))
-        fit_error.append(np.abs(fluence[e] / total_fit[e])-1)
-        e = e+1
+def band_function(x_bins, norm, gamma_a, gamma_b, E_0):
 
-    return fit_error
+    x_break = (gamma_b - gamma_a) * E_0
+    low_e_val = norm * (x_bins ** -gamma_a) * np.exp(-x_bins / E_0)
+    high_e_factor = (x_break ** (gamma_b - gamma_a)) * np.exp(gamma_a - gamma_b)
+    high_e_val = norm * (x_bins ** -gamma_b) * high_e_factor
 
-def band_func(first_guess, energy):
+    return np.where(x_bins <= x_break, low_e_val, high_e_val)
+
+
+def plot_band_func(first_guess, date, figure_obj):#, energy):
     """
     Defining the Band function for plotting the fit
     """
-    
+    energy = np.arange(0,2000,0.1) # Creating an array of energies across all bins (0 - 2000 MeV) to use for plotting the end fit
 
     parvals = first_guess.valuesdict()
-    norm = parvals['norm']
+    norm =  parvals['norm']
     gamma_a = parvals['gamma_a']
     gamma_b = parvals['gamma_b']
-    E_0 = parvals['break_energy']
-        # print(norm, gamma_a, gamma_b, E_0, E_t, E_r)
+    E_0 = parvals['E_0']
+
+    band = band_function(energy, norm, gamma_a, gamma_b, E_0)
+
+    figure_obj.plot(energy, band)
+    figure_obj.set_title('Band Function Fit ' + str(date))
+    return band
+
+
+
+def fluence_histograms(obs_specs, pred_specs, model, energy_key, thresh_fnm, validation_type):
+    error_dictionary = {}
+    x_loc = 0
     
-    band = []
-    e = 0
-    E_transition = (gamma_b - gamma_a)*E_0
-    # print('Transition Energy ', E_transition)
-
-    for e in range(len(energy)):
+    #iterate through all spectra, interpolate observations to model energies, find log error between the two for
+    # each energy. Save in dictionary
+    for m in range(len(pred_specs)):
+        model_fluence_array = []
+        model_energy_bin = []
+        model_bin_min = []
+        model_bin_max = []
+        diff_bin_dictionary = {}
+        for n in range(len(pred_specs[m])):
+            
+            if pred_specs[m][n]['energy_max'] == pred_specs[m][n]['energy_min'] and obs_specs[m][0]['energy_max'] == -1 \
+                or pred_specs[m][n]['energy_max'] == -1 and obs_specs[m][0]['energy_max'] == -1:
+                    if m == 0 or str(pred_specs[m][n]['energy_min']) not in list(error_dictionary.keys()):
+                        error_dictionary[str(pred_specs[m][n]['energy_min'])] = []
+                    model_energy_bin.append(pred_specs[m][n]['energy_min'])
+                    model_fluence_array.append(pred_specs[m][n]['fluence'])
+            elif pred_specs[m][n]['energy_max'] != -1 and obs_specs[m][n]['energy_max'] != -1:
+                string_bin = str(pred_specs[m][n]['energy_min']) + '-' + str(pred_specs[m][n]['energy_max'])
+                if m == 0 or string_bin not in list(error_dictionary.keys()):
+                        error_dictionary[string_bin] = []
+                if string_bin not in list(diff_bin_dictionary.keys()):
+                    diff_bin_dictionary[string_bin] = (pred_specs[m][n]['energy_max']+pred_specs[m][n]['energy_min'])/2
+                model_energy_bin.append((pred_specs[m][n]['energy_max']+pred_specs[m][n]['energy_min'])/2)
+                model_bin_min.append(model_energy_bin[m][n] - pred_specs[m][n]['energy_min'])
+                model_bin_max.append(pred_specs[m][n]['energy_max'] - model_energy_bin[m][n])
+                model_fluence_array.append(pred_specs[m][n]['fluence'])
         
-        if energy[e] <= (gamma_b - gamma_a)*E_0:
-            band.append(norm*energy[e]**(-gamma_a)*math.exp(-energy[e] / E_0))
-        else:
-            band.append(norm*energy[e]**(-gamma_b)*((gamma_b-gamma_a)*E_0)**(gamma_b-gamma_a)*math.exp(gamma_a-gamma_b))
-        band[e] = band[e]
-        e = e+1
-
-    return band, E_transition
-
-def fluence_fitting_stuff(obs, pred, events, model_name, threshold, energy_key):
-    """
-    Doing stuff with the fluences that are found - plotting and fitting
-    the spectra via a Band/ER function which is then fit via the least_squares
-    package
 
 
-
-    Inputs:
-    obs - 
-    pred - 
-    event_label - string labeling the event being investigated
-    model_name - string, model's name
-    """
-
-    if len(obs) == len(pred) == len(events):
-        model_band_gamma_a = []
-        model_band_gamma_b = []
-        model_band_rollover = []
-        model_band_norm = []
-
-        model_er_gamma = []
-        model_er_rollover = []
-        model_er_norm = []
-
-
-        obs_band_gamma_a = []
-        obs_band_gamma_b = []
-        obs_band_rollover = []
-        obs_band_norm = []
-
-        obs_er_gamma = []
-        obs_er_rollover = []
-        obs_er_norm = []
-
-        for m in range(len(pred)):
-            model_fluence_array = []
-            model_energy_bin = []
-            model_bin_min = []
-            model_bin_max = []
-            model_bin_width = []
-            for n in range(len(pred[m])):
-                # Checking that we are comparing the same kind of spectrum for both obs and pred - both need to be integral or both are differential
-                if pred[m][n]['energy_max'] == pred[m][n]['energy_min'] and obs[m][0]['energy_max'] == -1 or pred[m][n]['energy_max'] == -1 and obs[m][0]['energy_max'] == -1 :
-                    model_energy_bin.append(pred[m][n]['energy_min'])
-                    model_fluence_array.append(pred[m][n]['fluence'])
-                elif pred[m][n]['energy_max'] != -1 and obs[m][n]['energy_max'] != -1:
-                    model_energy_bin.append((pred[m][n]['energy_max']+pred[m][n]['energy_min'])/2)
-                    model_bin_min.append(model_energy_bin[m][n] - pred[m][n]['energy_min'])
-                    model_bin_max.append(pred[m][n]['energy_max'] - model_energy_bin[m][n])
-                    model_fluence_array.append(pred[m][n]['fluence'])
+        
+        obs_fluence_array = []
+        obs_energy_bin = []
+        obs_bin_min = []
+        obs_bin_max = []
+        
+        n = 0
+        for n in range(len(obs_specs[m])):
+            # if integral flux turn to differential flux (rudimentary for now)
+            if obs_specs[m][n]['energy_max'] == obs_specs[m][n]['energy_min'] or obs_specs[m][n]['energy_max'] == -1:
+                obs_energy_bin.append(obs_specs[m][n]['energy_min'])
+                obs_fluence_array.append(obs_specs[m][n]['fluence'])
+            else:
+                obs_energy_bin.append((obs_specs[m][n]['energy_max']+obs_specs[m][n]['energy_min'])/2)
+                # obs_bin_min.append(obs_energy_bin[m][n] - obs[m][n]['energy_min'])
+                # obs_bin_max.append(obs[m][n]['energy_max'] - obs_energy_bin[m][n])
+                obs_fluence_array.append(obs_specs[m][n]['fluence'])
+        if len(obs_fluence_array) != len(obs_specs[m]):
+            obs_fluence_array.append(obs_specs[m][n+1]['fluence'])
+            obs_energy_bin.append(obs_specs[m][n]['energy_min'])
             
-
-            
-            obs_fluence_array = []
-            obs_energy_bin = []
-            obs_bin_min = []
-            obs_bin_max = []
-            obs_bin_width = []
-            n = 0
-            for n in range(len(obs[m])):
-                # if integral flux turn to differential flux (rudimentary for now)
-                if obs[m][n]['energy_max'] == obs[m][n]['energy_min'] or obs[m][n]['energy_max'] == -1:
-                    obs_energy_bin.append(obs[m][n]['energy_min'])
-                    obs_fluence_array.append(obs[m][n]['fluence']) # -obs[m][n+1]['fluence']
-                else:
-                    obs_energy_bin.append((obs[m][n]['energy_max']+obs[m][n]['energy_min'])/2)
-                    # obs_bin_min.append(obs_energy_bin[m][n] - obs[m][n]['energy_min'])
-                    # obs_bin_max.append(obs[m][n]['energy_max'] - obs_energy_bin[m][n])
-                    obs_fluence_array.append(obs[m][n]['fluence'])
-            if len(obs_fluence_array) != len(obs[m]):
-                obs_fluence_array.append(obs[m][n+1]['fluence'])
-                obs_energy_bin.append(obs[m][n]['energy_min'])
+        
     
-            new_obs_fluence, new_bins = interpolate_fluence(obs_energy_bin, obs_fluence_array, model_energy_bin, model_fluence_array)
-            energy = np.arange(0,2000,1) # Creating an array of energies across all bins (5 - 2000 MeV) to use for plotting the end fit
-            
-
-            
-            # # input()
-            min_obs_er_params, fit_obs_er, transition_obs_er = fit_ellisonramaty_function(obs_energy_bin, obs_fluence_array, energy)
-            print('Obs Fit ER Parameters', min_obs_er_params.params, min_obs_er_params.chisqr)#, min_obs_er.message)
-            obs_powerlaw = False
-            try:
-                obs_er_params = min_obs_er_params.params.valuesdict()
-                obs_norm_er = obs_er_params['norm']
-                obs_gamma_er = obs_er_params['gamma_er']
-                obs_er_er = obs_er_params['roll_over']
-                print('Now printing fit report for Ellison-Ramaty function:')
-                print(fit_report(min_obs_er_params))
-            except:
-                obs_er_params = min_obs_er_params.params.valuesdict()
-                obs_norm_er = obs_er_params['norm']
-                obs_gamma_er = obs_er_params['spectral_index']
-                obs_er_er = obs_er_params['coefficient']
-                print('Now printing fit report for Powerlaw function:')
-                print(fit_report(min_obs_er_params))
-                obs_powerlaw = True
-
-            min_model_er_params, fit_model_er, transition_model_er = fit_ellisonramaty_function(model_energy_bin, model_fluence_array, energy)
-            print('Model Fit ER Parameters', min_model_er_params.params, min_model_er_params.chisqr)#, min_model_er.message)
-            model_powerlaw = False
-            try:
-                model_er_params = min_model_er_params.params.valuesdict()
-                model_norm_er = model_er_params['norm']
-                model_gamma_er = model_er_params['gamma_er']
-                model_er_er = model_er_params['roll_over']
-                print(fit_report(min_model_er_params))
-            except:
-                model_er_params = min_model_er_params.params.valuesdict()
-                model_norm_er = model_er_params['norm']
-                model_gamma_er = model_er_params['spectral_index']
-                model_er_er = model_er_params['coefficient']
-                print(fit_report(min_model_er_params))
-                model_powerlaw = True
-
-
-            # input()
-            min_obs_band_params, fit_obs_band, transition_obs_band = fit_band_function(obs_energy_bin, obs_fluence_array, energy)
-            print('Best Fit Band Parameters Obs: ', min_obs_band_params.params, min_obs_band_params.chisqr)#, min_obs_band.message)
-            obs_band_params = min_obs_band_params.params.valuesdict() 
-            obs_norm_band = obs_band_params['norm']
-            obs_gamma_a_band = obs_band_params['gamma_a']
-            obs_gamma_b_band = obs_band_params['gamma_b']
-            obs_e_0_band = obs_band_params['break_energy']
-            print(fit_report(min_obs_band_params))
-
-            min_model_band_params, fit_model_band, transition_model_band = fit_band_function(model_energy_bin, model_fluence_array, energy)
-            print('Best Fit Band Parameters Model: ', min_model_band_params.params, min_model_band_params.chisqr)#, min_model_band.message)
-            model_band_params = min_model_band_params.params.valuesdict() 
-            model_norm_band = model_band_params['norm']
-            model_gamma_a_band = model_band_params['gamma_a']
-            model_gamma_b_band = model_band_params['gamma_b']
-            model_e_0_band = model_band_params['break_energy']
-
+        interpolated_obs_fluence, interpolated_bins = interpolate_fluence(obs_energy_bin, obs_fluence_array, model_energy_bin, model_fluence_array)
         
-            # print(new_bins, new_obs, model_fluence_array)
-            # print(model_name, new_bins)
-            # input()
-            # print(fluence_error)
-
-
-            cwd = os.getcwd()
-
-            fig = plt.figure(figsize=(20,10))
-            ax = plt.subplot(111)
-            ax.errorbar(obs_energy_bin, obs_fluence_array, fmt = 'o', label = 'Observations', color = 'Red') 
-            ax.plot(model_energy_bin, model_fluence_array, 'P', label = 'Model', color = 'Blue')
-            ax.plot(new_bins, new_obs_fluence, 'o', label = 'Interpolated Obs Fluence')
-            plt.yscale("log")
-            plt.xscale('log')
-            
-            
-            plt.ylim((10**(-2),10**12))
-
-            ax.plot(energy, fit_obs_er, color = 'Red', linestyle = 'dashdot', label = 'Ellison-Ramaty')
-            ax.plot(energy, fit_model_er, color = 'Blue', linestyle = 'dashdot')
-            ax.plot(energy, fit_obs_band, color = 'Red', linestyle = 'dashed', label = 'Band')
-            ax.plot(energy, fit_model_band, color = 'Blue', linestyle = 'dashed')
-            
-            
-            if obs_powerlaw == False:
-                ax.text(100,10**7,'E-R Function Parameters: ' + str(obs_gamma_er) + ', ' + str(obs_er_er), color = 'Red')
+    
+        fluence_error, error_bins = error_fluence_calc(interpolated_bins, interpolated_obs_fluence, model_energy_bin, model_fluence_array)
+        for bins in error_bins:
+            if diff_bin_dictionary != {}:
+                
+                current_bin = str(next((k for k, v in diff_bin_dictionary.items() if v == bins), None))
             else:
-                ax.text(100,10**7,'Powerlaw Parameters: ' + '\n Spectral Index ' + str(obs_gamma_er),  color = 'Red')
-            ax.text(100, 10**8, 'Band Function Parameters: ' + 'Gamma_a= ' + str(obs_gamma_a_band) + '\nGamma_b=' + str(obs_gamma_b_band) + '\nE_break=  '\
-                + str(obs_e_0_band), color = 'Red')
-            if model_powerlaw == False:
-                ax.text(10**1,0.65,'E-R Function Parameters: ' + str(model_gamma_er) + ', ' + str(model_er_er), color = 'Blue')
-            else:
-                ax.text(10**1,0.65,'Powerlaw Parameters: ' + '\n Spectral Index ' + str(model_gamma_er),  color = 'Blue')
-            ax.text(10, 10**-1, 'Band Function Parameters: Gamma_a= ' + str(model_gamma_a_band) + '\nGamma_b= ' + str(model_gamma_b_band) + '\nE_break= '\
-                + str(model_e_0_band), color = 'Blue')
-            # ax.axvline(x=transition_obs_er, color ='Red', linestyle = 'dotted', label = 'roll-over energy obs: Ellison-Ramaty')
-            # ax.axvline(x=transition_model_er, color ='Blue', linestyle = 'dotted')
-            plt.yscale("log")
-            plt.xscale('log')
-            plt.xlabel("Energy (MeV)", fontsize = '12')
-            plt.ylabel('Fluence (' + str(config.t2_units) + ')', fontsize = '12')
-            plt.title('Observed and Model Fluence Spectra for ' + str(events[m]).rsplit(' ')[0])
-            ax.legend(loc = 'lower left', fontsize='10', framealpha=1.0) 
-            savename = config.outpath + '/plots/band_fitting_' + model_name + "_" +  str(events[m]).rsplit(' ')[0] + '_' + energy_key + '_' + threshold + '.pdf'
-            fig.savefig(savename)
-
-            plt.close(fig)
-
-            model_band_gamma_a.append(model_gamma_a_band)
-            model_band_gamma_b.append(model_gamma_b_band)
-            model_band_rollover.append(model_e_0_band)
-            model_band_norm.append(model_norm_band)
-
-            model_er_gamma.append(model_gamma_er)
-            model_er_rollover.append(model_er_er)
-            model_er_norm.append(model_norm_er)
-
-            obs_band_gamma_a.append(obs_gamma_a_band)
-            obs_band_gamma_b.append(obs_gamma_b_band)
-            obs_band_rollover.append(obs_e_0_band)
-            obs_band_norm.append(obs_norm_band)
-
-            obs_er_gamma.append(obs_gamma_er)
-            obs_er_rollover.append(obs_er_er)
-            obs_er_norm.append(obs_norm_er)
-        
-        
-        
-        
-        
-        
-        corr_plot = plotting_tools.correlation_plot(obs_er_gamma, model_er_gamma, 'Spectral Slopes of Ellison-Ramaty Function', xlabel="Observations", ylabel="Model",  value="Value", use_log = False, use_logx = False, use_logy = False)
-        figname = config.outpath + '/plots/Correlation_er_gamma_' + model_name + "_" + energy_key + '_' + threshold
-        figname += ".pdf"
-        corr_plot.savefig(figname, dpi=300, bbox_inches='tight')
-        corr_plot.close()
-
-        corr_plot = plotting_tools.correlation_plot(obs_er_rollover, model_er_rollover, 'Rollover Energy of Ellison-Ramaty Function', xlabel="Observations", ylabel="Model",  value="Value", use_log = True, use_logx = True, use_logy = True)
-        figname = config.outpath + '/plots/Correlation_er_rollover_' + model_name + "_" + energy_key + '_' + threshold
-        figname += ".pdf"
-        corr_plot.savefig(figname, dpi=300, bbox_inches='tight')
-        corr_plot.close()
-
-        corr_plot = plotting_tools.correlation_plot(obs_band_gamma_a, model_band_gamma_a, 'Low Energy Spectral Slopes of Band Function', xlabel="Observations", ylabel="Model",  value="Value", use_log = False, use_logx = False, use_logy = False)
-        figname = config.outpath + '/plots/Correlation_band_gamma_a_' + model_name + "_" + energy_key + '_' + threshold
-        figname += ".pdf"
-        corr_plot.savefig(figname, dpi=300, bbox_inches='tight')
-        corr_plot.close()
-
-        corr_plot = plotting_tools.correlation_plot(obs_band_gamma_b, model_band_gamma_b, 'High Energy Spectral Slopes of Band Function', xlabel="Observations", ylabel="Model",  value="Value", use_log = False, use_logx = False, use_logy = False)
-        figname = config.outpath + '/plots/Correlation_band_gamma_b_' + model_name + "_" + energy_key + '_' + threshold
-        figname += ".pdf"
-        corr_plot.savefig(figname, dpi=300, bbox_inches='tight')
-        corr_plot.close()
-
-        corr_plot = plotting_tools.correlation_plot(obs_band_rollover, model_band_rollover, 'Rollover Energy of Band Function', xlabel="Observations", ylabel="Model",  value="Value", use_log = True, use_logx = True, use_logy = True)
-        figname = config.outpath + '/plots/Correlation_band_rollover_' + model_name + "_" + energy_key + '_' + threshold
-        figname += ".pdf"
-        corr_plot.savefig(figname, dpi=300, bbox_inches='tight')
-        corr_plot.close()
+                current_bin = str(bins)
+            error_dictionary[current_bin].append(fluence_error[str(bins)])
 
 
-
-def fluence_histograms(model_energy_bins, fluence_error, obs_error_energy_bins, model_name, energy_key, threshold):
-    i = 0
-    j = 0
-
-   
-    all_bins_error = []
-    energy_label = []
-    for energy in model_energy_bins:
-        bin_error = []
-        
-        for i in range(len(fluence_error)):
-            
-            # print(fluence_error[i][6])
-            for j in range(len(obs_error_energy_bins[i])):
-                if obs_error_energy_bins[i][j] == energy:
-                    if fluence_error[i][j] == None:
-                        pass
-                    else:
-                        bin_error.append(fluence_error[i][j])
-                            
-                        
-        
-        if bin_error == []:
+    fig1 = plt.figure(figsize=(10,8),  layout='constrained')
+    ax = plt.subplot(111)
+    # Now that all errors have been found/calcuated. Run through histogram generation for plotting    
+    # bins_hist = [-4,-3.5,-3,-2.5,-2,-1.5,-1,-0.5,0,0.5,1,1.5,2,2.5,3,3.5,4]
+    
+    bin_edges = [-4, -3.5, -3.0, -2.5, -2.0, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4]
+    hist_range = (np.min(bin_edges), np.max(bin_edges))
+    for bins in list(error_dictionary.keys()):
+        if error_dictionary[bins] == []:
             continue
-        all_bins_error.append(bin_error)
-        energy_label.append(energy)
-        fig1 = plt.figure(figsize=(8,5))
-        ax1 = plt.subplot(111)
-        plt.hist(bin_error, alpha=0.5, label=model_name + ' ' +str(energy))
-        plt.legend(loc='upper right')
-        plt.xlabel('Log Error')
-        plt.ylabel('Counts')
-        plt.title('Histogram of ' + model_name + ' Fluence Log Error for energy bin ' + str(energy) + ' MeV')
-        figname = config.outpath + '/plots/Fluence_LE_histogram_' + model_name + "_" +  energy_key + '_'  + threshold + '_' \
-                + str(energy) + "_MeV" ".pdf"
-        plt.savefig(figname, dpi=300, bbox_inches='tight')
-        plt.close(fig1)
         
+        filtered_list = [x for x in error_dictionary[bins] if x is not None]
+        vert_hist = np.histogram(filtered_list, range = hist_range, bins=16)[0]#/len(filtered_list)
+
+        
+        normalized_histogram = vert_hist# / np.max(vert_hist)
+        
+        binned_maximums = np.max(normalized_histogram)
+                        
+                        
+        lefts = x_loc      
+        heights = np.diff(bin_edges)
+        centers = bin_edges[:-1]  + heights / 2
+        ax.barh(centers, normalized_histogram, height=heights, left = lefts, label = bins)
+
+        x_loc = x_loc + binned_maximums + 2
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize = 'small')
+    plt.grid(visible=True, which='major', axis='y')
+    plt.xticks([])
+    plt.ylabel('Log Error')
+    plt.xlabel('Energy Bins (MeV)')
+    plt.title('Histograms of ' + model + ' Fluence Log Error for Each Energy Bin')
+    figname = cfg.outpath + '/plots/Fluence_LE_histogram_' + model + "_" + validation_type + ".pdf"
+    # plt.show()
+    plt.savefig(figname, dpi=300)
+    plt.close()
 
 
-    # Creating the box plots now
-    savename = config.outpath + '/plots/Fluence_LE_boxplot_' + model_name + "_" +  energy_key + '_'  + threshold + '.pdf'
-    plot_title = 'Fluence Log Error Across all Energy Bins for ' + model_name + ' with energy key/threshold ' + energy_key + ' ' + threshold
-    plotting_tools.box_plot(all_bins_error, energy_label, x_label="Energy Bins (MeV)", y_label="Log Error", title=plot_title, \
-        save=savename, uselog=False, showplot=False, closeplot=True)
 
-
-    return
+    return figname
 
 
 
@@ -546,29 +508,29 @@ def interpolate_fluence(obs_energy_bin, obs_fluence_array, model_energy_bin, mod
     new_obs_fluence = []
     new_bins = []
     i = 0
-    for i in range(nbin_obs-1):
-        # taking care of zeroes since log10(0) is infinity
+    for i in range(nbin_obs):
         if obs_fluence_array[i] == 0.0:
             obs_fluence_array[i] = 1.0
-        elif obs_fluence_array[i+1] == 0.0:
-            obs_fluence_array[i+1] = 1.0
-        rise =np.log10(obs_fluence_array[i+1]) - np.log10(obs_fluence_array[i])
-        # rise.imag = 
-        run = np.log10(obs_energy_bin[i+1]) - np.log10(obs_energy_bin[i])
+        try:
+            if obs_fluence_array[i+1] == 0.0:
+                obs_fluence_array[i+1] = 1.0
+        except:
+            continue
         
+        rise =np.log10(obs_fluence_array[i+1]) - np.log10(obs_fluence_array[i]) 
+        run = np.log10(obs_energy_bin[i+1]) - np.log10(obs_energy_bin[i])
+
         slope = rise / run
         k = 0
-        # print('Obs Bin ',obs_energy_bin[i], slope)
         for k in range(nbin_mod):
             # print(k)
             if model_energy_bin[k] >= obs_energy_bin[i] and model_energy_bin[k] < obs_energy_bin[i+1]:
                 new_bins.append(model_energy_bin[k])
                 new_obs_fluence.append(obs_fluence_array[i]*(model_energy_bin[k]/obs_energy_bin[i])**(slope))
                 
-                
-                # print(new_bins[k], new_obs_fluence[k], rise, run)
-            k += 1
-        i += 1
+        
+        #     k += 1
+        # i += 1
 
     # This replaces any 0s with 1s b/c we take the log10 of the fluence elements for
     # the LE calc so log10(0) is undefined whereas log10(1) = 0
@@ -586,7 +548,7 @@ def error_fluence_calc(obs_energy_bin, obs_fluence, model_energy_bin, model_flue
     Calculates the Log Error of the Fluence between the model fluence and 
     the observed fluence for each of the model's energy bins
     """ 
-    fluence_error = []
+    fluence_error = {}
     error_bins = []
     i = 0
     for i in range(len(obs_energy_bin)):
@@ -594,102 +556,296 @@ def error_fluence_calc(obs_energy_bin, obs_fluence, model_energy_bin, model_flue
             if obs_energy_bin[i] == model_energy_bin[j]:
                 # print(model_energy_bin[j])
                 error_bins.append(model_energy_bin[j])
-                fluence_error.append(np.log10(model_fluence[j])-np.log10(obs_fluence[i]))
-                if fluence_error[i] == np.inf or fluence_error[i] == -np.inf:
-                    fluence_error[i] = None
+                fluence_error[str(model_energy_bin[j])] = np.log10(model_fluence[j])-np.log10(obs_fluence[i])
+                if fluence_error[str(model_energy_bin[j])] == np.inf or fluence_error[str(model_energy_bin[j])] == -np.inf:
+                    fluence_error[str(model_energy_bin[j])] = None
         i += 1
+    
+
+
     return fluence_error, error_bins
 
 
 
-def fluence_validation(sub, model, energy_key, threshold):
-    obs = sub['Observed SEP Fluence Spectrum'].to_list()
-    pred = sub['Predicted SEP Fluence Spectrum'].to_list()
-    events = sub['Prediction Window Start'].to_list()
-    obs_units = sub['Observed SEP Fluence Units'].to_list() # useless right now? Everything has the same units... its suspicious
-    pred_units = sub['Predicted SEP Fluence Units'].to_list() # useless right now? Everything has the same units... its suspicious, like
-    # UMASEP's energy bins look like differential channels but have the units of integral.... 
+def fitting_procedure(fit_dict, current_event_df, energy_key, date, thresh_key, validation_type):
+    obs_spectrum = current_event_df._11 # Observed SEP Fluence Spectrum
+    pred_spectrum = current_event_df._13 # Predicted SEP Fluence Spectrum
+    obs_units = current_event_df._12 # Observed SEP Fluence Spectrum Units
+    pred_units = current_event_df._14 # Predicted SEP Fluence Spectrum Units
+    print('obs units', obs_units, 'pred units', pred_units)
+
+    # Will always convert model spectrum to the units of the observations - typically from differential to integral
+    if obs_units != pred_units or cfg.model_diff_to_int_boolean: # boolean condition is temporary, since ipath does not have integral bins but some of its units are listed as integral incorrectly
+        print('In this loop')
+        pred_bins = [n['energy_min'] for n in pred_spectrum]
+        obs_bins = [n['energy_min'] for n in obs_spectrum]
+        obs_fluence_spectrum = [n['fluence'] for n in obs_spectrum]
+        pred_fluence_spectrum = [n['fluence'] for n in pred_spectrum]
+        pred_fluence_spectrum  = differential_to_int_fluence(pred_fluence_spectrum)
+
+        # return fit_dict
+    else:
+        if 'MeV' in vunits.convert_units_to_string(obs_units): #differential so use bin means with widths
+            obs_bins = [(n['energy_min']+n['energy_max'])/2 for n in obs_spectrum]
+            obs_fluence_spectrum = [n for n in obs_spectrum['fluence']]      
+        elif 'cm' in vunits.convert_units_to_string(obs_units): #integral so use energy_min as bins
+            obs_bins = [n['energy_min'] for n in obs_spectrum]
+            obs_fluence_spectrum = [n['fluence'] for n in obs_spectrum]
+        
+        if 'MeV' in vunits.convert_units_to_string(pred_units): #differential so use bin means with widths
+            pred_bins = [(n['energy_min']+n['energy_max'])/2 for n in pred_spectrum]
+            pred_fluence_spectrum = [n['fluence'] for n in pred_spectrum] 
+        elif 'cm' in vunits.convert_units_to_string(pred_units): #integral so use energy_min as bins
+            pred_bins = [n['energy_min'] for n in pred_spectrum]
+            pred_fluence_spectrum = [n['fluence'] for n in pred_spectrum]
+
+    obs_bins = np.array(obs_bins)
+    pred_bins = np.array(pred_bins)
+    obs_fluence_spectrum = np.array(obs_fluence_spectrum)
+    pred_fluence_spectrum = np.array(pred_fluence_spectrum)
+
+    fit_dict['Model'].append(current_event_df.Model)
+    fit_dict['Energy Channel'].append(current_event_df._1)
+    fit_dict['Threshold'].append(current_event_df._2)
+    fit_dict['Prediction Energy Channel'].append(current_event_df._4)
+    fit_dict['Prediction Threshold'].append(current_event_df._5)
+    fit_dict['Predicted SEP Fluence Spectrum'].append(pred_spectrum)
+    fit_dict['Predicted SEP Fluence Spectrum Units'].append(pred_units)
+    fit_dict['Observed SEP Fluence Spectrum'].append(obs_spectrum)
+    fit_dict['Observed SEP Fluence Spectrum Units'].append(obs_units)
+    functions = ['Band Function', 'Ellison Ramaty'] #  
+    for f in functions:
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        plt.scatter(obs_bins, obs_fluence_spectrum, color = 'blue', label = 'Observed')        
+        obs_fit_output= switch_fit_func(f, obs_bins, obs_fluence_spectrum, date, ax)
+        plt.scatter(pred_bins, pred_fluence_spectrum, color = 'orange', label = 'Predicted')
+        pred_fit_output = switch_fit_func(f, pred_bins, pred_fluence_spectrum, date, ax)
+        if obs_fit_output == None or pred_fit_output == None:
+            continue
+        print(obs_fit_output.chisqr, obs_fit_output.redchi, pred_fit_output.chisqr, pred_fit_output.redchi)
+        plt.yscale('log')
+        plt.xscale('log')
+        plt.ylim(bottom=10**-5)  
+        plt.legend()
+        plt.xlabel("Energy (MeV)", fontsize = '12')
+        plt.ylabel('Fluence (' + str(pred_units) + ')', fontsize = '12')
+        # plt.show()
+        name ='fluence_spectrum_' + current_event_df.Model + '_' + f.replace(' ', '_') + '_' + str(date).replace(' ', '_').replace(':', '-') + '_' + energy_key + '_' + validation_type + '.pdf'
+        savename = os.path.join(cfg.outpath, 'plots', name)
+        if os.path.isfile(savename): # this already exists for some reason, may be from an earlier run or potentially the model produced multiple predictions for the same event
+            current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            name ='fluence_spectrum_' + current_event_df.Model + '_' + f.replace(' ', '_') + '_' + str(date).replace(' ', '_').replace(':', '-') + '_' + energy_key  + '_' + validation_type + '_' + current_time + '.pdf'
+            savename = os.path.join(cfg.outpath, 'plots', name)
+        plt.savefig(savename)
+        plt.close()
 
 
 
+        if f == 'Band Function':
 
-    do_fitting = True
-    fluence_all_events = []
-    error_bins_all_events = []
+            mapping = band_selections_mapping()
 
-    if len(obs) == len(pred) == len(events):
-        for m in range(len(pred)):
-            model_fluence_array = []
-            model_energy_bin = []
-            model_bin_min = []
-            model_bin_max = []
-            model_bin_width = []
-            for n in range(len(pred[m])):
-                # Checking that we are comparing the same kind of spectrum for both obs and pred - both need to be integral or both are differential 
-                #  (if energy_min =  energy_max or energy_max = -1 then these are integral(?), otherwise they are diff)
-                # 
-                if pred[m][n]['energy_max'] == pred[m][n]['energy_min'] and obs[m][0]['energy_max'] == -1 \
-                    or pred[m][n]['energy_max'] == -1 and obs[m][0]['energy_max'] == -1:
-                        model_energy_bin.append(pred[m][n]['energy_min'])
-                        model_fluence_array.append(pred[m][n]['fluence'])
-                elif pred[m][n]['energy_max'] != -1 and obs[m][n]['energy_max'] != -1:
-                    model_energy_bin.append((pred[m][n]['energy_max']+pred[m][n]['energy_min'])/2)
-                    model_bin_min.append(model_energy_bin[m][n] - pred[m][n]['energy_min'])
-                    model_bin_max.append(pred[m][n]['energy_max'] - model_energy_bin[m][n])
-                    model_fluence_array.append(pred[m][n]['fluence'])
-            
-
-
-            
-            obs_fluence_array = []
-            obs_energy_bin = []
-            obs_bin_min = []
-            obs_bin_max = []
-            obs_bin_width = []
-            n = 0
-            for n in range(len(obs[m])):
-                # if integral flux turn to differential flux (rudimentary for now)
-                if obs[m][n]['energy_max'] == obs[m][n]['energy_min'] or obs[m][n]['energy_max'] == -1:
-                    obs_energy_bin.append(obs[m][n]['energy_min'])
-                    obs_fluence_array.append(obs[m][n]['fluence']) # -obs[m][n+1]['fluence']
+            for label, param in mapping:
+                if 'Reduced' in label:
+                    fit_dict['Observed ' + f + ' ' + label].append(float(obs_fit_output.redchi))
+                    fit_dict['Model ' + f + ' ' + label].append(float(pred_fit_output.redchi))
+                elif 'ChiSquare' in label:
+                    fit_dict['Observed ' + f + ' ' + label].append(float(obs_fit_output.chisqr))
+                    fit_dict['Model ' + f + ' ' + label].append(float(pred_fit_output.chisqr))
                 else:
-                    obs_energy_bin.append((obs[m][n]['energy_max']+obs[m][n]['energy_min'])/2)
-                    # obs_bin_min.append(obs_energy_bin[m][n] - obs[m][n]['energy_min'])
-                    # obs_bin_max.append(obs[m][n]['energy_max'] - obs_energy_bin[m][n])
-                    obs_fluence_array.append(obs[m][n]['fluence'])
-            if len(obs_fluence_array) != len(obs[m]):
-                obs_fluence_array.append(obs[m][n+1]['fluence'])
-                obs_energy_bin.append(obs[m][n]['energy_min'])
-                
+                    current_obs_param = str(obs_fit_output.params.create_uvars()[param]).rsplit('+/-')
+                    
+                    if '(' in current_obs_param[0]:
+                        current_obs_param = str(obs_fit_output.params.create_uvars()[param]).rsplit(')')
+                        exponential = current_obs_param[1]
+                        obs_param = float(current_obs_param[0].rsplit('+/-')[0].replace('(', '') + exponential) 
+                        obs_uncertainty = float(current_obs_param[0].rsplit('+/-')[1].replace(')', '') + exponential)
+                    else:
+                        obs_param = float(current_obs_param[0])
+                        obs_uncertainty = float(current_obs_param[1])
+                    current_pred_param = str(pred_fit_output.params.create_uvars()[param]).rsplit('+/-')
+                    if '(' in current_pred_param[0]:
+                        current_pred_param = str(pred_fit_output.params.create_uvars()[param]).rsplit(')')
+                        exponential = current_pred_param[1]
+                        pred_param = float(current_pred_param[0].rsplit('+/-')[0].replace('(', '') + exponential) 
+                        pred_uncertainty = float(current_pred_param[0].rsplit('+/-')[1].replace(')', '') + exponential)
+                    else:
+                        pred_param = float(current_pred_param[0])
+                        pred_uncertainty = float(current_pred_param[1])    
+
+                    fit_dict['Observed ' + f + ' ' + label].append(obs_param)
+                    fit_dict['Observed ' + f + ' ' + label + ' Uncertainty'].append(obs_uncertainty)
+                    fit_dict['Model ' + f + ' ' + label].append(pred_param)
+                    fit_dict['Model ' + f + ' ' + label + ' Uncertainty'].append(pred_uncertainty)
+            fit_dict[f + ' Fit Plot'].append(name)
             
+        else:
+            mapping = er_selections_mapping()
+
+            for label, param in mapping:
+                if 'Reduced' in label:
+                    fit_dict['Observed ' + f + ' ' + label].append(float(obs_fit_output.redchi))
+                    fit_dict['Model ' + f + ' ' + label].append(float(pred_fit_output.redchi))
+                elif 'ChiSquare' in label:
+                    fit_dict['Observed ' + f + ' ' + label].append(float(obs_fit_output.chisqr))
+                    fit_dict['Model ' + f + ' ' + label].append(float(pred_fit_output.chisqr))
+                else:
+                    current_obs_param = str(obs_fit_output.params.create_uvars()[param]).rsplit('+/-')
+                    print(current_obs_param)
+                    if '(' in current_obs_param[0]:
+                        current_obs_param = str(obs_fit_output.params.create_uvars()[param]).rsplit(')')
+                        exponential = current_obs_param[1]
+                        obs_param = float(current_obs_param[0].rsplit('+/-')[0].replace('(', '') + exponential) 
+                        obs_uncertainty = float(current_obs_param[0].rsplit('+/-')[1].replace(')', '') + exponential)
+                    else:
+                        obs_param = float(current_obs_param[0])
+                        obs_uncertainty = float(current_obs_param[1])
+                    current_pred_param = str(pred_fit_output.params.create_uvars()[param]).rsplit('+/-')
+                    if '(' in current_pred_param[0]:
+                        current_pred_param = str(pred_fit_output.params.create_uvars()[param]).rsplit(')')
+                        exponential = current_pred_param[1]
+                        pred_param = float(current_pred_param[0].rsplit('+/-')[0].replace('(', '') + exponential) 
+                        pred_uncertainty = float(current_pred_param[0].rsplit('+/-')[1].replace(')', '') + exponential)
+                    else:
+                        pred_param = float(current_pred_param[0])
+                        pred_uncertainty = float(current_pred_param[1])    
+          
+                    fit_dict['Observed ' + f + ' ' + label].append(obs_param)
+                    fit_dict['Observed ' + f + ' ' + label + ' Uncertainty'].append(obs_uncertainty)
+                    fit_dict['Model ' + f + ' ' + label].append(pred_param)
+                    fit_dict['Model ' + f + ' ' + label + ' Uncertainty'].append(pred_uncertainty)
+            fit_dict[f + ' Fit Plot'].append(name)
+            
+
+    return 
+
+
+
+def band_selections_mapping():
+    mapping = [
+        ('Low Energy Spectral Slope', 'gamma_a'),
+        ('High Energy Spectral Slope','gamma_b'),
+        ('Rollover Energy', 'E_0'),
+        ('Normalization Factor', 'norm'),
+        ('ChiSquared', 'chisqr'),
+        ('Reduced ChiSquared', 'redchi')
+    ]
+    return mapping
+
+def er_selections_mapping():
+    mapping = [
+        ('Spectral Slope', 'gamma_er'),
+        ('Rollover Energy', 'E_r'),
+        ('Normalization Factor', 'norm'),
+        ('ChiSquared', 'chisqr'),
+        ('Reduced ChiSquared', 'redchi')
+    ]
+    return mapping
+
+
+
+def switch_fit_func(fitting_function, energy_bins, fluence_spectrum, date, fig_obj):
+    func = {
+        'Band Function': fit_band_function,
+        'Ellison Ramaty': fit_ellisonramaty_function
+    }.get(fitting_function)
+
+    fit_output = func(energy_bins, fluence_spectrum, date, fig_obj)
+    return fit_output
+
+def make_thresh_fname(thresh_key):
+    """ Make threshold string for filenames.
+
+    """
+    thr = thresh_key.strip().split(".units") #threshold.10.0.units.1 / (cm2 s sr)
+    thr = thr[0] #threshold.10.0
+    thr = thr.strip().split("threshold.")
+    thresh_fnm = "threshold_" + thr[1]
+    return thresh_fnm
+
+def fluence_spectrum_validation_selections(sub_sphinx_df, model, energy_key, thresh_key, validation_type):
+    """
+    Purpose is to generate the information that will be contained within the selections
+    files, similar to other metrics/quantities. The biggest difference is that this function
+    will also do the initial fitting of the spectra, then put the fit parameters in the selections
+    files, as well as plot the fit. 
+
+    """
+    # pass in only what is needed from validation.py - an empty dataframe should never reach this point
+    mismatch = bool(sub_sphinx_df.iloc[0]['Mismatch Allowed'])
+    pred_energy_key = str(sub_sphinx_df.iloc[0]['Prediction Energy Channel Key'])
+    pred_thresh_key = str(sub_sphinx_df.iloc[0]['Prediction Threshold Key'])
+    # thresh_fnm = make_thresh_fname(thresh_key)
+    event_list = sub_sphinx_df['Observed SEP Threshold Crossing Time'].to_list()
+    fit_dict = metrics_dicts.initialize_fluence_spectrum_selections_dict()
+    for event in event_list:
+        current_event_df = sub_sphinx_df.loc[(sub_sphinx_df['Observed SEP Threshold Crossing Time'] == event)]     
         
-            new_obs_fluence, new_bins = interpolate_fluence(obs_energy_bin, obs_fluence_array, model_energy_bin, model_fluence_array)
-            
-            
-            
-            fig = plt.figure(figsize=(20,10))
-            ax = plt.subplot(111)
-            ax.plot(obs_energy_bin, obs_fluence_array, 'o', label = 'Observations', color = 'Red') 
-            ax.plot(model_energy_bin, model_fluence_array, 'P', label = 'Model', color = 'Blue') 
-            ax.plot(new_bins, new_obs_fluence, 'o', label = 'Interpolated Obs Fluence', color = 'Black') 
-            plt.yscale("log")
-            plt.xscale('log')
-            ax.legend(loc = 'lower left', fontsize='10', framealpha=1.0)
-            # plt.show()
-            figname = config.outpath + '/plots/Fluence_' + str(events[m]).rsplit(' ')[0] + '_' + model + "_" +  energy_key + '_'  + threshold + ".pdf"
-            plt.savefig(figname, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-            
-
-
-            fluence_error, error_bins = error_fluence_calc(new_bins, new_obs_fluence, model_energy_bin, model_fluence_array)
-            
-
-            fluence_all_events.append(fluence_error)
-            error_bins_all_events.append(error_bins)
-
-    fluence_histograms(model_energy_bin, fluence_all_events, error_bins_all_events, model, energy_key, threshold)
+        for valid_events in current_event_df.itertuples(index = False):
+            fitting_procedure(fit_dict, valid_events, energy_key, event, thresh_key, validation_type)
+    return fit_dict
     
-    if do_fitting:
-        fluence_fitting_stuff(obs, pred, events, model, threshold, energy_key)
         
+            
+def fluence_spectrum_validation_metrics_workflow(fluence_spec_metrics, selections_df, model, energy_key, thresh_key, validation_type):
+    """
+    Fitting has been completed and its time to generate some metrics:
+    Fitting metrics: plots, correlation coefficients of fit parameters
+
+    Error metrics: mean/median log error for each energy channel. Plots 
+    of histograms of errors in each energy bin 
+
+    """
+    
+    fluence_spec_metrics['Model'].append(model)
+    fluence_spec_metrics['Energy Channel'].append(energy_key)
+    fluence_spec_metrics['Threshold'].append(thresh_key)
+    fit_parameter_dictionary = {
+        'Band Function': ['Low Energy Spectral Slope', 'High Energy Spectral Slope', 'Rollover Energy'],
+        'Ellison Ramaty': ['Spectral Slope', 'Rollover Energy']
+    }
+    fit_types = ['Band Function', 'Ellison Ramaty']
+    thresh_fnm = make_thresh_fname(thresh_key)
+    for forms in fit_types:
+        fit_params = fit_parameter_dictionary[forms]
+        #Correlation Plot
+        for params in fit_params:
+            selection_string = forms + ' ' + params
+            obs = selections_df['Observed ' + selection_string].to_list()
+            pred = selections_df['Model ' + selection_string].to_list()
+
+            if 'Rollover' in params:
+                use_log = True
+            else:
+                use_log = False
+            print(selection_string, len(obs), len(pred), obs, pred)
+            corr_plot = plt_tools.correlation_plot(obs,pred,
+            "Fluence Spectrum Correlation of " + selection_string, xlabel="Observations",
+            ylabel="Model", use_log = use_log)
+
+            figname = cfg.outpath + '/plots/Correlation_fluence_spectrum' + selection_string.replace(' ', '_') + model + "_" \
+                    + energy_key.strip() + "_" + thresh_fnm
+            if cfg.do_mismatch:
+                figname = figname + "_mm"
+            if validation_type != "" and validation_type != "All":
+                figname = figname + "_" + validation_type
+            figname += ".pdf"
+            corr_plot.savefig(figname, dpi=300, bbox_inches='tight')
+            corr_plot.close()
+
+            fluence_spec_metrics[selection_string + ' Correlation Plot'].append(figname)
+
+            error = selections_df['Observed ' + selection_string] - selections_df['Model ' + selection_string]
+            fluence_spec_metrics['Mean ' + selection_string + ' Error'].append(np.mean(error))
+            fluence_spec_metrics['Median ' + selection_string + ' Error'].append(np.nanmedian(error))
+
+    #histograms
+    obs_specs = selections_df['Observed SEP Fluence Spectrum'].to_list()
+    pred_specs = selections_df['Predicted SEP Fluence Spectrum'].to_list()
+    histo_name = fluence_histograms(obs_specs, pred_specs, model, energy_key, thresh_fnm, validation_type)
+    
+    fluence_spec_metrics['Histogram of Log Errors Plot'].append(histo_name)
+
+    return
+
